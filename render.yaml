@@ -1,0 +1,20 @@
+services:
+  - type: worker
+    name: ki-vlr-discord-bot
+    runtime: node
+    plan: starter
+    region: frankfurt
+    buildCommand: npm ci && npm run check && npm test
+    preDeployCommand: npm run deploy
+    startCommand: npm start
+    envVars:
+      - key: DISCORD_TOKEN
+        sync: false
+      - key: CLIENT_ID
+        sync: false
+      - key: GUILD_ID
+        sync: false
+    disk:
+      name: bot-data
+      mountPath: /opt/render/project/src/data
+      sizeGB: 1

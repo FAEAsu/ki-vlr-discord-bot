@@ -1,0 +1,20 @@
+{
+  "name": "ki-vlr-discord-bot",
+  "version": "1.2.1",
+  "private": true,
+  "description": "Bot Discord KI | Vlr : captcha, bienvenue, rôles et vocaux temporaires personnalisables.",
+  "main": "src/index.js",
+  "type": "commonjs",
+  "scripts": {
+    "deploy": "node --env-file-if-exists=.env src/deploy-commands.js",
+    "start": "node --env-file-if-exists=.env src/index.js",
+    "check": "node --check src/index.js && node --check src/deploy-commands.js",
+    "test": "node tests/smoke-test.js"
+  },
+  "engines": {
+    "node": ">=22 <25"
+  },
+  "dependencies": {
+    "discord.js": "^14.27.0"
+  }
+}
