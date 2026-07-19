@@ -1127,7 +1127,15 @@ async function handleSetVocVisibilityButton(interaction) {
         `Vocal passé en privé par ${interaction.user.tag}`,
       );
     } else {
-      await target.channel.lockPermissions();
+        await target.channel.permissionOverwrites.set([
+          {
+            id: interaction.guild.roles.everyone.id,
+            allow: [
+              PermissionFlagsBits.ViewChannel,
+              PermissionFlagsBits.Connect,
+            ],
+          },
+                ]);
 
       await target.channel.setName(
         temporaryVoiceNameForVisibility(target.channel.name, false),
