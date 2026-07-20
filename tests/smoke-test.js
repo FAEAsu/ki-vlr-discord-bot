@@ -1,7 +1,11 @@
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
 const { PermissionFlagsBits } = require('discord.js');
 
 const {
+  ConfigStore,
   buildBasicRoleSetupPanel,
   buildCaptchaSetupPanel,
   buildPrivateVoiceOverwrites,
@@ -170,4 +174,35 @@ const setVocCommand = commands.find((command) => command.name === 'setvoc');
 assert.equal(setVocCommand.default_member_permissions, undefined);
 assert.equal(setVocCommand.dm_permission, false);
 
-console.log('Tests réussis : commandes, panneaux, liste blanche /setvoc, rôle basique et captcha PNG.');
+const persistenceDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ki-vlr-config-'));
+const configPath = path.join(persistenceDir, 'config.json');
+const backupPath = path.join(persistenceDir, 'config.backup.json');
+const persistenceStore = new ConfigStore(configPath, backupPath);
+async function testPersistence() {
+  await persistenceStore.updateGuild('123456789012345678', (guildConfig) => {
+  guildConfig.welcome = { channelId: '223456789012345678' };
+});
+assert.equal(fs.existsSync(configPath), true);
+assert.equal(fs.existsSync(backupPath), true);
+const reloadedStore = new ConfigStore(configPath, backupPath);
+assert.equal(
+  reloadedStore.getGuild('123456789012345678').welcome.channelId,
+  '223456789012345678',
+);
+fs.writeFileSync(configPath, '{config cassée', 'utf8');
+const restoredStore = new ConfigStore(configPath, backupPath);
+assert.equal(
+  restoredStore.getGuild('123456789012345678').welcome.channelId,
+  '223456789012345678',
+);
+  fs.rmSync(persistenceDir, { recursive: true, force: true });
+}
+
+testPersistence()
+  .then(() => {
+    console.log('Tests réussis : persistance, commandes, panneaux, liste blanche /setvoc, rôle basique et captcha PNG.');
+  })
+  .catch((error) => {
+    console.error(error);
+    process.exitCode = 1;
+  });

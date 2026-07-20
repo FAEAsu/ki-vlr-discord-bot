@@ -1,6 +1,6 @@
 # Bot Discord KI | Vlr
 
-Bot Discord en Node.js avec captcha, bienvenue, rôles automatiques et vocaux temporaires personnalisables.
+Bot Discord en Node.js avec captcha, bienvenue, rôles automatiques, configuration persistante et vocaux temporaires personnalisables.
 
 ## Commandes
 
@@ -18,7 +18,7 @@ Bot Discord en Node.js avec captcha, bienvenue, rôles automatiques et vocaux te
 `/setvoc` permet de choisir :
 
 - 🔓 **Public** ;
-- 🔒 **Privé** ; le salon est automatiquement renommé **Vocal de PSEUDO (Private)** ;
+- 🔒 **Privé** ; les permissions changent immédiatement et le salon est synchronisé vers **Vocal de PSEUDO (Private)** ;
 - une **liste blanche** de membres autorisés à voir et rejoindre le vocal privé ;
 - l’ajout de plusieurs membres à la fois avec le sélecteur **Membres autorisés** ;
 - le retrait facile de plusieurs membres depuis le bouton **Liste blanche** ;
@@ -38,9 +38,9 @@ Lorsqu’un membre rejoint **➕ Créer un vocal** :
 4. le propriétaire peut utiliser `/setvoc` ;
 5. le salon est supprimé lorsqu’il devient vide.
 
-Les identifiants, propriétaires et listes blanches des salons temporaires sont sauvegardés dans `data/config.json`.
+Les réglages `/captcha`, `/welcome`, `/voc`, `/rolebasique`, ainsi que les propriétaires, états privé/public et listes blanches des salons temporaires sont sauvegardés dans `data/config.json`. Une copie de secours est aussi conservée dans `data/config.backup.json`.
 
-Quand un vocal est privé, seuls son propriétaire, les membres ajoutés à la liste blanche et les administrateurs peuvent le voir et le rejoindre. Un membre retiré de la liste blanche perd immédiatement l’accès et est déconnecté s’il se trouve encore dans le vocal.
+Quand un vocal est privé, seuls son propriétaire, les membres ajoutés à la liste blanche et les administrateurs peuvent le voir et le rejoindre. Un membre retiré de la liste blanche perd immédiatement l’accès et est déconnecté s’il se trouve encore dans le vocal. Les permissions sont modifiées via les routes dédiées, afin qu’un enchaînement **Public → Privé → Public → Privé** réponde immédiatement. Discord pouvant limiter les renommages répétés, le suffixe `(Private)` peut se synchroniser légèrement après les permissions sans bloquer le panneau.
 
 ## Captcha
 
@@ -121,6 +121,7 @@ Remplace les fichiers du projet avec ceux de cette archive, mais conserve :
 ```text
 .env
 data/config.json
+data/config.backup.json
 ```
 
 Puis exécute :
@@ -144,6 +145,6 @@ npm test
 
 ## Déploiement Render
 
-Le projet inclut désormais `render.yaml` et `.node-version`.
+Le projet inclut `render.yaml`, `.node-version` et la variable `DATA_DIR`. Le disque Render doit être monté sur `/opt/render/project/src/data` pour conserver la configuration après chaque redémarrage.
 
 Pour déployer : pousse le contenu du dossier à la racine d'un dépôt GitHub privé, puis utilise **New > Blueprint** dans Render. Consulte `RENDER.md` pour les étapes détaillées.

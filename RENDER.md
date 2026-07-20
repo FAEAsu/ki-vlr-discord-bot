@@ -1,39 +1,52 @@
 # Déploiement sur Render
 
-Ce dépôt est prêt pour un déploiement Render via **Blueprint**.
+Ce dépôt est prêt pour un **Background Worker Render** via Blueprint.
 
-## Avant le push GitHub
+## Stockage persistant obligatoire
 
-Ne jamais envoyer :
-
-- `.env`
-- `node_modules/`
-- `data/config.json`
-
-Ces éléments sont déjà exclus par `.gitignore`.
-
-## Déploiement
-
-1. Pousse le contenu de ce dossier à la racine d'un dépôt GitHub privé.
-2. Dans Render, choisis **New > Blueprint**.
-3. Connecte le dépôt GitHub.
-4. Render détecte `render.yaml`.
-5. Renseigne les trois secrets demandés :
-   - `DISCORD_TOKEN`
-   - `CLIENT_ID`
-   - `GUILD_ID`
-6. Applique le Blueprint.
-
-Le Blueprint crée un **Background Worker Starter** en région Frankfurt avec un disque persistant monté sur :
+Render utilise un système de fichiers temporaire par défaut. Pour conserver les réglages du bot après un redémarrage, le service doit avoir un disque persistant avec :
 
 ```text
-/opt/render/project/src/data
+Mount Path : /opt/render/project/src/data
 ```
 
-Le disque conserve `data/config.json`, qui contient les réglages du captcha, de bienvenue, des rôles et des vocaux temporaires.
+Le fichier `render.yaml` configure automatiquement :
+
+```text
+DATA_DIR=/opt/render/project/src/data
+Disque : bot-data
+Taille : 1 Go
+```
+
+Le bot enregistre alors :
+
+```text
+/opt/render/project/src/data/config.json
+/opt/render/project/src/data/config.backup.json
+```
+
+## Si le service existe déjà
+
+Dans Render, ouvre le Background Worker puis vérifie la section **Disks**. Si aucun disque n’est attaché :
+
+1. ajoute un disque nommé `bot-data` ;
+2. utilise le chemin `/opt/render/project/src/data` ;
+3. choisis la taille minimale ;
+4. dans **Environment**, ajoute `DATA_DIR` avec la même valeur ;
+5. redéploie le service.
+
+Les réglages faits avant l’ajout du disque ne peuvent pas être récupérés s’ils ont déjà été supprimés par un redémarrage. Après l’ajout du disque, ils restent conservés.
+
+## Variables secrètes
+
+- `DISCORD_TOKEN`
+- `CLIENT_ID`
+- `GUILD_ID`
 
 ## Commandes Render
 
 - Build : `npm ci && npm run check && npm test`
 - Pre-deploy : `npm run deploy`
 - Start : `npm start`
+
+Ne pousse jamais `.env`, `node_modules/`, `data/config.json` ou `data/config.backup.json` sur GitHub.

@@ -15,7 +15,10 @@ const {
   GatewayIntentBits,
   MessageFlags,
   ModalBuilder,
+  OverwriteType,
   PermissionFlagsBits,
+  PermissionOverwrites,
+  Routes,
   RoleSelectMenuBuilder,
   StringSelectMenuBuilder,
   TextInputBuilder,
@@ -31,15 +34,18 @@ if (require.main === module && !token) {
 }
 
 const BRAND = 'KI | Vlr';
-const CONFIG_PATH = path.join(__dirname, '..', 'data', 'config.json');
+const DATA_DIR = path.resolve(process.env.DATA_DIR || path.join(__dirname, '..', 'data'));
+const CONFIG_PATH = path.join(DATA_DIR, 'config.json');
+const CONFIG_BACKUP_PATH = path.join(DATA_DIR, 'config.backup.json');
 const SESSION_TTL_MS = 15 * 60 * 1000;
 const CAPTCHA_TTL_MS = 2 * 60 * 1000;
 const CAPTCHA_COOLDOWN_MS = 10 * 1000;
 const MAX_CAPTCHA_ATTEMPTS = 3;
 
 class ConfigStore {
-  constructor(filePath) {
+  constructor(filePath, backupPath) {
     this.filePath = filePath;
+    this.backupPath = backupPath;
     this.data = {};
     this.writeQueue = Promise.resolve();
     this.load();
@@ -48,16 +54,43 @@ class ConfigStore {
   load() {
     fs.mkdirSync(path.dirname(this.filePath), { recursive: true });
 
+    const readJson = (filePath) => {
+      const raw = fs.readFileSync(filePath, 'utf8');
+      return raw.trim() ? JSON.parse(raw) : {};
+    };
+
     if (!fs.existsSync(this.filePath)) {
+      if (this.backupPath && fs.existsSync(this.backupPath)) {
+        try {
+          this.data = readJson(this.backupPath);
+          fs.writeFileSync(this.filePath, `${JSON.stringify(this.data, null, 2)}\n`, 'utf8');
+          console.warn('Configuration restaurée depuis la sauvegarde persistante.');
+          return;
+        } catch (error) {
+          console.error('La sauvegarde de configuration est illisible :', error);
+        }
+      }
+
       fs.writeFileSync(this.filePath, '{}\n', 'utf8');
       return;
     }
 
     try {
-      const raw = fs.readFileSync(this.filePath, 'utf8');
-      this.data = raw.trim() ? JSON.parse(raw) : {};
+      this.data = readJson(this.filePath);
     } catch (error) {
-      console.error('Le fichier data/config.json est illisible :', error);
+      console.error(`Le fichier ${this.filePath} est illisible :`, error);
+
+      if (this.backupPath && fs.existsSync(this.backupPath)) {
+        try {
+          this.data = readJson(this.backupPath);
+          fs.writeFileSync(this.filePath, `${JSON.stringify(this.data, null, 2)}\n`, 'utf8');
+          console.warn('Configuration principale restaurée depuis la sauvegarde.');
+          return;
+        } catch (backupError) {
+          console.error('La sauvegarde de configuration est également illisible :', backupError);
+        }
+      }
+
       process.exit(1);
     }
   }
@@ -96,6 +129,14 @@ class ConfigStore {
         guildConfig.voice.tempChannelWhitelists = {};
       }
 
+      if (
+        !guildConfig.voice.tempChannelPrivateStates ||
+        typeof guildConfig.voice.tempChannelPrivateStates !== 'object' ||
+        Array.isArray(guildConfig.voice.tempChannelPrivateStates)
+      ) {
+        guildConfig.voice.tempChannelPrivateStates = {};
+      }
+
       for (const channelId of guildConfig.voice.tempChannelIds) {
         if (!Array.isArray(guildConfig.voice.tempChannelWhitelists[channelId])) {
           guildConfig.voice.tempChannelWhitelists[channelId] = [];
@@ -127,6 +168,10 @@ class ConfigStore {
         await fs.promises.copyFile(temporaryPath, this.filePath);
         await fs.promises.unlink(temporaryPath).catch(() => null);
       }
+
+      if (this.backupPath) {
+        await fs.promises.copyFile(this.filePath, this.backupPath);
+      }
     });
 
     this.writeQueue = operation;
@@ -134,13 +179,23 @@ class ConfigStore {
   }
 }
 
-const store = new ConfigStore(CONFIG_PATH);
+const store = new ConfigStore(CONFIG_PATH, CONFIG_BACKUP_PATH);
+console.log(`Configuration enregistrée dans : ${CONFIG_PATH}`);
+if (process.env.RENDER === 'true' && !process.env.DATA_DIR) {
+  console.warn(
+    'ATTENTION : DATA_DIR n’est pas défini. Sans disque Render monté sur le dossier data, la configuration sera perdue au redémarrage.',
+  );
+}
 const setupSessions = new Map();
 const activeCaptchas = new Map();
 const captchaCooldowns = new Map();
 const voiceCreationLocks = new Set();
 const whitelistAddDrafts = new Map();
 const whitelistRemoveDrafts = new Map();
+const voiceVisibilityLocks = new Set();
+const voiceRenameStates = new Map();
+const VOICE_RENAME_WINDOW_MS = 10 * 60 * 1000;
+const VOICE_RENAME_MAX_CHANGES = 2;
 
 const client = new Client({
   intents: [
@@ -366,8 +421,59 @@ function buildVoiceSetupPanel(session) {
   };
 }
 
-function isTemporaryVoicePrivate(channel) {
+function isTemporaryVoicePrivate(channel, guildId = channel.guild?.id) {
+  if (guildId) {
+    const storedState = store.getGuild(guildId).voice?.tempChannelPrivateStates?.[channel.id];
+    if (typeof storedState === 'boolean') return storedState;
+  }
+
   return channel.name.endsWith(PRIVATE_VOICE_SUFFIX);
+}
+
+async function setTemporaryVoicePrivateState(guildId, channelId, isPrivate) {
+  await store.updateGuild(guildId, (guildConfig) => {
+    if (!guildConfig.voice) return;
+    guildConfig.voice.tempChannelPrivateStates =
+      guildConfig.voice.tempChannelPrivateStates ?? {};
+    guildConfig.voice.tempChannelPrivateStates[channelId] = Boolean(isPrivate);
+  });
+}
+
+function buildSyncedVoiceOverwrites(parentChannel) {
+  return parentChannel.permissionOverwrites.cache.map((overwrite) => ({
+    id: overwrite.id,
+    type: overwrite.type,
+    allow: overwrite.allow.bitfield,
+    deny: overwrite.deny.bitfield,
+  }));
+}
+
+async function replacePermissionOverwritesFast(channel, overwrites, reason) {
+  const freshChannel =
+    (await channel.guild.channels.fetch(channel.id, { force: true }).catch(() => null)) ?? channel;
+  const resolvedOverwrites = overwrites.map((overwrite) =>
+    PermissionOverwrites.resolve(overwrite, channel.guild),
+  );
+  const desiredIds = new Set(resolvedOverwrites.map((overwrite) => overwrite.id));
+
+  const deletions = [...freshChannel.permissionOverwrites.cache.keys()]
+    .filter((overwriteId) => !desiredIds.has(overwriteId))
+    .map((overwriteId) =>
+      client.rest.delete(Routes.channelPermission(channel.id, overwriteId), { reason }),
+    );
+
+  const updates = resolvedOverwrites.map((overwrite) =>
+    client.rest.put(Routes.channelPermission(channel.id, overwrite.id), {
+      body: overwrite,
+      reason,
+    }),
+  );
+
+  await Promise.all([...deletions, ...updates]);
+
+  return (
+    (await channel.guild.channels.fetch(channel.id, { force: true }).catch(() => null)) ?? channel
+  );
 }
 
 function whitelistDraftKey(guildId, channelId, userId) {
@@ -411,6 +517,7 @@ function buildPrivateVoiceOverwrites(guild, ownerId, allowedMemberIds = []) {
   const overwrites = [
     {
       id: guild.roles.everyone.id,
+      type: OverwriteType.Role,
       deny: [PermissionFlagsBits.ViewChannel, PermissionFlagsBits.Connect],
     },
   ];
@@ -426,6 +533,7 @@ function buildPrivateVoiceOverwrites(guild, ownerId, allowedMemberIds = []) {
   for (const memberId of uniqueSnowflakes([ownerId, ...allowedMemberIds].filter(Boolean))) {
     overwrites.push({
       id: memberId,
+      type: OverwriteType.Member,
       allow: allowedPermissions,
     });
   }
@@ -433,6 +541,7 @@ function buildPrivateVoiceOverwrites(guild, ownerId, allowedMemberIds = []) {
   if (guild.members.me) {
     overwrites.push({
       id: guild.members.me.id,
+      type: OverwriteType.Member,
       allow: [
         PermissionFlagsBits.ViewChannel,
         PermissionFlagsBits.Connect,
@@ -451,7 +560,10 @@ function formatVoiceLimit(userLimit) {
 }
 
 function buildSetVocPanel(channel, ownerId, options = {}) {
-  const isPrivate = isTemporaryVoicePrivate(channel);
+  const isPrivate =
+    typeof options.isPrivate === 'boolean'
+      ? options.isPrivate
+      : isTemporaryVoicePrivate(channel);
   const allowedMemberIds = uniqueSnowflakes(options.allowedMemberIds ?? []);
   const pendingMemberIds = uniqueSnowflakes(options.pendingMemberIds ?? []);
   const pendingText = pendingMemberIds.length
@@ -993,60 +1105,83 @@ async function handleAdminCommand(interaction) {
   }
 }
 
+async function replySetVocError(interaction, content) {
+  const payload = { content, embeds: [], components: [] };
+
+  if (interaction.deferred) {
+    await interaction.editReply(payload).catch(() => null);
+    return;
+  }
+
+  if (interaction.replied) {
+    await interaction
+      .followUp({ content, flags: MessageFlags.Ephemeral })
+      .catch(() => null);
+    return;
+  }
+
+  await interaction
+    .reply({ content, flags: MessageFlags.Ephemeral })
+    .catch(() => null);
+}
+
 async function getSetVocTarget(interaction, expectedChannelId = null) {
   if (!interaction.inGuild()) {
-    await interaction.reply({
-      content: '❌ Cette commande peut uniquement être utilisée dans un serveur.',
-      flags: MessageFlags.Ephemeral,
-    });
+    await replySetVocError(
+      interaction,
+      '❌ Cette commande peut uniquement être utilisée dans un serveur.',
+    );
     return null;
   }
 
-  const member = await interaction.guild.members.fetch(interaction.user.id).catch(() => null);
+  const member =
+    interaction.member?.voice !== undefined
+      ? interaction.member
+      : await interaction.guild.members.fetch(interaction.user.id).catch(() => null);
   const currentChannelId = member?.voice.channelId;
 
   if (!currentChannelId) {
-    await interaction.reply({
-      content: '❌ Tu dois être connecté à un salon vocal pour utiliser `/setvoc`.',
-      flags: MessageFlags.Ephemeral,
-    });
+    await replySetVocError(
+      interaction,
+      '❌ Tu dois être connecté à un salon vocal pour utiliser `/setvoc`.',
+    );
     return null;
   }
 
   if (expectedChannelId && currentChannelId !== expectedChannelId) {
-    await interaction.reply({
-      content: '❌ Tu as quitté ce vocal ou changé de salon. Relance `/setvoc` dans le vocal à modifier.',
-      flags: MessageFlags.Ephemeral,
-    });
+    await replySetVocError(
+      interaction,
+      '❌ Tu as quitté ce vocal ou changé de salon. Relance `/setvoc` dans le vocal à modifier.',
+    );
     return null;
   }
 
   const voiceConfig = store.getGuild(interaction.guildId).voice;
   if (!voiceConfig?.tempChannelIds?.includes(currentChannelId)) {
-    await interaction.reply({
-      content: '❌ Le salon dans lequel tu te trouves n’est pas un vocal temporaire créé par le bot.',
-      flags: MessageFlags.Ephemeral,
-    });
+    await replySetVocError(
+      interaction,
+      '❌ Le salon dans lequel tu te trouves n’est pas un vocal temporaire créé par le bot.',
+    );
     return null;
   }
 
   const ownerId = voiceConfig.tempChannelOwners?.[currentChannelId] ?? null;
   if (!isAdministrator(interaction) && ownerId !== interaction.user.id) {
-    await interaction.reply({
-      content: ownerId
+    await replySetVocError(
+      interaction,
+      ownerId
         ? '❌ Ce vocal temporaire ne t’appartient pas.'
         : '❌ Le propriétaire de cet ancien vocal n’est pas enregistré. Recrée un nouveau vocal temporaire.',
-      flags: MessageFlags.Ephemeral,
-    });
+    );
     return null;
   }
 
-  const channel = await interaction.guild.channels.fetch(currentChannelId).catch(() => null);
+  const cachedChannel = interaction.guild.channels.cache.get(currentChannelId);
+  const channel =
+    cachedChannel ??
+    (await interaction.guild.channels.fetch(currentChannelId).catch(() => null));
   if (!channel || channel.type !== ChannelType.GuildVoice) {
-    await interaction.reply({
-      content: '❌ Ce salon vocal est introuvable.',
-      flags: MessageFlags.Ephemeral,
-    });
+    await replySetVocError(interaction, '❌ Ce salon vocal est introuvable.');
     return null;
   }
 
@@ -1057,11 +1192,10 @@ async function getSetVocTarget(interaction, expectedChannelId = null) {
       PermissionFlagsBits.ManageRoles,
     ])
   ) {
-    await interaction.reply({
-      content:
-        '❌ Le bot a besoin des permissions **Gérer les salons** et **Gérer les rôles** dans ce vocal.',
-      flags: MessageFlags.Ephemeral,
-    });
+    await replySetVocError(
+      interaction,
+      '❌ Le bot a besoin des permissions **Gérer les salons** et **Gérer les rôles** dans ce vocal.',
+    );
     return null;
   }
 
@@ -1085,71 +1219,78 @@ async function handleSetVocCommand(interaction) {
 
 async function handleSetVocVisibilityButton(interaction) {
   const [, , visibility, channelId] = interaction.customId.split(':');
+
+  // Accusé de réception avant tout fetch ou changement Discord : le bouton ne peut plus expirer.
+  await interaction.deferUpdate();
+
   const target = await getSetVocTarget(interaction, channelId);
   if (!target) return;
 
   if (!['private', 'public'].includes(visibility)) {
-    await interaction.reply({
-      content: '❌ Cette option de visibilité est invalide.',
-      flags: MessageFlags.Ephemeral,
-    });
+    await replySetVocError(interaction, '❌ Cette option de visibilité est invalide.');
     return;
   }
 
-  if (visibility === 'public' && !target.channel.parentId) {
-    await interaction.reply({
-      content: '❌ Impossible de restaurer les permissions : ce vocal n’a plus de catégorie.',
-      flags: MessageFlags.Ephemeral,
-    });
+  if (voiceVisibilityLocks.has(channelId)) {
+    await interaction
+      .followUp({
+        content: '⏳ Une modification de ce vocal est déjà en cours. Réessaie dans un instant.',
+        flags: MessageFlags.Ephemeral,
+      })
+      .catch(() => null);
     return;
   }
 
-  // Discord demande qu'une interaction soit confirmée très rapidement. Les changements
-  // de permissions et de nom peuvent être ralentis par la limite de requêtes des salons.
-  // On confirme donc le clic avant de lancer les modifications.
-  await interaction.deferUpdate();
+  const isPrivate = visibility === 'private';
+  let parentChannel = null;
 
+  if (!isPrivate) {
+    parentChannel =
+      target.channel.parent ??
+      (target.channel.parentId
+        ? await interaction.guild.channels.fetch(target.channel.parentId).catch(() => null)
+        : null);
+
+    if (!parentChannel || parentChannel.type !== ChannelType.GuildCategory) {
+      await replySetVocError(
+        interaction,
+        '❌ Impossible de restaurer les permissions : ce vocal n’a plus de catégorie.',
+      );
+      return;
+    }
+  }
+
+  voiceVisibilityLocks.add(channelId);
   const reason = `Visibilité du vocal modifiée par ${interaction.user.tag}`;
 
   try {
-    if (visibility === 'private') {
-      await target.channel.permissionOverwrites.set(
-        buildPrivateVoiceOverwrites(
+    const overwrites = isPrivate
+      ? buildPrivateVoiceOverwrites(
           interaction.guild,
           target.ownerId,
           getTemporaryVoiceWhitelist(interaction.guildId, channelId),
-        ),
-        reason,
-      );
+        )
+      : buildSyncedVoiceOverwrites(parentChannel);
 
-      await target.channel.setName(
-        temporaryVoiceNameForVisibility(target.channel.name, true),
-        `Vocal passé en privé par ${interaction.user.tag}`,
-      );
-    } else {
-        await target.channel.permissionOverwrites.set([
-          {
-            id: interaction.guild.roles.everyone.id,
-            allow: [
-              PermissionFlagsBits.ViewChannel,
-              PermissionFlagsBits.Connect,
-            ],
-          },
-                ]);
+    // Une seule requête de permissions, sans attendre le renommage du salon.
+    // Discord limite fortement les renommages répétés ; ils sont synchronisés en arrière-plan.
+    const refreshedChannel = await replacePermissionOverwritesFast(
+      target.channel,
+      overwrites,
+      reason,
+    );
+    await setTemporaryVoicePrivateState(interaction.guildId, channelId, isPrivate);
 
-      await target.channel.setName(
-        temporaryVoiceNameForVisibility(target.channel.name, false),
-        `Vocal repassé en public par ${interaction.user.tag}`,
-      );
-    }
-
-    const refreshedChannel = await interaction.guild.channels.fetch(channelId);
-    const allowedMemberIds = getTemporaryVoiceWhitelist(interaction.guildId, channelId);
-    if (visibility === 'public') clearWhitelistDraftsForChannel(interaction.guildId, channelId);
+    if (!isPrivate) clearWhitelistDraftsForChannel(interaction.guildId, channelId);
 
     await interaction.editReply(
-      buildSetVocPanel(refreshedChannel, target.ownerId, { allowedMemberIds }),
+      buildSetVocPanel(refreshedChannel, target.ownerId, {
+        isPrivate,
+        allowedMemberIds: getTemporaryVoiceWhitelist(interaction.guildId, channelId),
+      }),
     );
+
+    scheduleTemporaryVoiceNameSync(refreshedChannel, isPrivate);
   } catch (error) {
     console.error(`Impossible de passer le vocal ${channelId} en ${visibility} :`, error);
 
@@ -1161,6 +1302,8 @@ async function handleSetVocVisibilityButton(interaction) {
         components: [],
       })
       .catch(() => null);
+  } finally {
+    voiceVisibilityLocks.delete(channelId);
   }
 }
 
@@ -1207,24 +1350,26 @@ async function handleWhitelistAddSelect(interaction) {
 
 async function handleWhitelistAddButton(interaction) {
   const [, , , channelId] = interaction.customId.split(':');
+  await interaction.deferUpdate();
+
   const target = await getSetVocTarget(interaction, channelId);
   if (!target) return;
 
   if (!isTemporaryVoicePrivate(target.channel)) {
-    await interaction.reply({
-      content: '❌ Passe d’abord le vocal en **Privé** pour gérer la liste blanche.',
-      flags: MessageFlags.Ephemeral,
-    });
+    await replySetVocError(
+      interaction,
+      '❌ Passe d’abord le vocal en **Privé** pour gérer la liste blanche.',
+    );
     return;
   }
 
   const draftKey = whitelistDraftKey(interaction.guildId, channelId, interaction.user.id);
   const pendingIds = whitelistAddDrafts.get(draftKey) ?? [];
   if (!pendingIds.length) {
-    await interaction.reply({
-      content: '❌ Sélectionne au moins un membre avant de cliquer sur **Valider**.',
-      flags: MessageFlags.Ephemeral,
-    });
+    await replySetVocError(
+      interaction,
+      '❌ Sélectionne au moins un membre avant de cliquer sur **Valider**.',
+    );
     return;
   }
 
@@ -1236,14 +1381,14 @@ async function handleWhitelistAddButton(interaction) {
     [...currentIds, ...validMembers.map((member) => member.id)],
   );
 
-  await target.channel.permissionOverwrites.set(
+  const refreshedChannel = await replacePermissionOverwritesFast(
+    target.channel,
     buildPrivateVoiceOverwrites(interaction.guild, target.ownerId, updatedIds),
     `Liste blanche modifiée par ${interaction.user.tag}`,
   );
 
   whitelistAddDrafts.delete(draftKey);
-  const refreshedChannel = await interaction.guild.channels.fetch(channelId);
-  await interaction.update(
+  await interaction.editReply(
     buildSetVocPanel(refreshedChannel, target.ownerId, { allowedMemberIds: updatedIds }),
   );
 }
@@ -1266,27 +1411,33 @@ async function showWhitelistPanel(interaction, channelId, ownerId, page = 0) {
   const removeKey = whitelistDraftKey(interaction.guildId, channelId, interaction.user.id);
   const selectedIds = whitelistRemoveDrafts.get(removeKey) ?? [];
 
-  await interaction.update(
-    buildWhitelistPanel(
-      await interaction.guild.channels.fetch(channelId),
-      ownerId,
-      members,
-      safePage,
-      selectedIds,
-    ),
+  const payload = buildWhitelistPanel(
+    await interaction.guild.channels.fetch(channelId, { force: true }),
+    ownerId,
+    members,
+    safePage,
+    selectedIds,
   );
+
+  if (interaction.deferred) {
+    await interaction.editReply(payload);
+  } else {
+    await interaction.update(payload);
+  }
 }
 
 async function handleWhitelistListButton(interaction) {
   const [, , , channelId] = interaction.customId.split(':');
+  await interaction.deferUpdate();
+
   const target = await getSetVocTarget(interaction, channelId);
   if (!target) return;
 
   if (!isTemporaryVoicePrivate(target.channel)) {
-    await interaction.reply({
-      content: '❌ La liste blanche est disponible uniquement quand le vocal est **Privé**.',
-      flags: MessageFlags.Ephemeral,
-    });
+    await replySetVocError(
+      interaction,
+      '❌ La liste blanche est disponible uniquement quand le vocal est **Privé**.',
+    );
     return;
   }
 
@@ -1298,6 +1449,8 @@ async function handleWhitelistListButton(interaction) {
 
 async function handleWhitelistRemoveSelect(interaction) {
   const [, , , channelId, rawPage] = interaction.customId.split(':');
+  await interaction.deferUpdate();
+
   const target = await getSetVocTarget(interaction, channelId);
   if (!target) return;
 
@@ -1308,24 +1461,23 @@ async function handleWhitelistRemoveSelect(interaction) {
 
 async function handleWhitelistRemoveButton(interaction) {
   const [, , , channelId, rawPage] = interaction.customId.split(':');
+  await interaction.deferUpdate();
+
   const target = await getSetVocTarget(interaction, channelId);
   if (!target) return;
 
   if (!isTemporaryVoicePrivate(target.channel)) {
-    await interaction.reply({
-      content: '❌ La liste blanche est disponible uniquement quand le vocal est **Privé**.',
-      flags: MessageFlags.Ephemeral,
-    });
+    await replySetVocError(
+      interaction,
+      '❌ La liste blanche est disponible uniquement quand le vocal est **Privé**.',
+    );
     return;
   }
 
   const removeKey = whitelistDraftKey(interaction.guildId, channelId, interaction.user.id);
   const selectedIds = whitelistRemoveDrafts.get(removeKey) ?? [];
   if (!selectedIds.length) {
-    await interaction.reply({
-      content: '❌ Sélectionne au moins un membre à retirer.',
-      flags: MessageFlags.Ephemeral,
-    });
+    await replySetVocError(interaction, '❌ Sélectionne au moins un membre à retirer.');
     return;
   }
 
@@ -1337,7 +1489,8 @@ async function handleWhitelistRemoveButton(interaction) {
     currentIds.filter((memberId) => !removedIds.has(memberId)),
   );
 
-  await target.channel.permissionOverwrites.set(
+  await replacePermissionOverwritesFast(
+    target.channel,
     buildPrivateVoiceOverwrites(interaction.guild, target.ownerId, updatedIds),
     `Membres retirés de la liste blanche par ${interaction.user.tag}`,
   );
@@ -1366,6 +1519,8 @@ async function handleWhitelistRemoveButton(interaction) {
 
 async function handleWhitelistPageButton(interaction) {
   const [, , , direction, channelId, rawPage] = interaction.customId.split(':');
+  await interaction.deferUpdate();
+
   const target = await getSetVocTarget(interaction, channelId);
   if (!target) return;
 
@@ -1770,6 +1925,7 @@ async function saveVoiceSetup(interaction, session) {
       tempChannelIds: previousVoiceConfig?.tempChannelIds ?? [],
       tempChannelOwners: previousVoiceConfig?.tempChannelOwners ?? {},
       tempChannelWhitelists: previousVoiceConfig?.tempChannelWhitelists ?? {},
+      tempChannelPrivateStates: previousVoiceConfig?.tempChannelPrivateStates ?? {},
     };
   });
 
@@ -2015,6 +2171,86 @@ function temporaryVoiceNameForVisibility(channelName, isPrivate) {
   return `${baseName.slice(0, 100 - PRIVATE_VOICE_SUFFIX.length)}${PRIVATE_VOICE_SUFFIX}`;
 }
 
+function scheduleTemporaryVoiceNameSync(channel, isPrivate) {
+  let state = voiceRenameStates.get(channel.id);
+  if (!state) {
+    state = {
+      channelId: channel.id,
+      guildId: channel.guild.id,
+      desiredPrivate: Boolean(isPrivate),
+      timestamps: [],
+      timer: null,
+      running: false,
+    };
+    voiceRenameStates.set(channel.id, state);
+  }
+
+  state.desiredPrivate = Boolean(isPrivate);
+  void runTemporaryVoiceNameSync(state);
+}
+
+async function runTemporaryVoiceNameSync(state) {
+  if (state.running || state.timer) return;
+
+  const guild = client.guilds.cache.get(state.guildId);
+  const channel =
+    guild?.channels.cache.get(state.channelId) ??
+    (await guild?.channels.fetch(state.channelId).catch(() => null));
+
+  if (!channel || channel.type !== ChannelType.GuildVoice) {
+    voiceRenameStates.delete(state.channelId);
+    return;
+  }
+
+  const desiredName = temporaryVoiceNameForVisibility(channel.name, state.desiredPrivate);
+  if (channel.name === desiredName) return;
+
+  const now = Date.now();
+  state.timestamps = state.timestamps.filter(
+    (timestamp) => now - timestamp < VOICE_RENAME_WINDOW_MS,
+  );
+
+  if (state.timestamps.length >= VOICE_RENAME_MAX_CHANGES) {
+    const waitMs = Math.max(1_000, state.timestamps[0] + VOICE_RENAME_WINDOW_MS - now + 1_000);
+    state.timer = setTimeout(() => {
+      state.timer = null;
+      void runTemporaryVoiceNameSync(state);
+    }, waitMs);
+    state.timer.unref();
+    return;
+  }
+
+  state.running = true;
+  state.timestamps.push(now);
+
+  try {
+    await channel.setName(
+      desiredName,
+      `Synchronisation du nom du vocal (${state.desiredPrivate ? 'privé' : 'public'})`,
+    );
+  } catch (error) {
+    console.error(`Impossible de synchroniser immédiatement le nom du vocal ${channel.id} :`, error);
+  } finally {
+    state.running = false;
+
+    const latestChannel =
+      guild?.channels.cache.get(state.channelId) ??
+      (await guild?.channels.fetch(state.channelId).catch(() => null));
+    if (!latestChannel) {
+      voiceRenameStates.delete(state.channelId);
+      return;
+    }
+
+    const latestDesiredName = temporaryVoiceNameForVisibility(
+      latestChannel.name,
+      state.desiredPrivate,
+    );
+    if (latestChannel.name !== latestDesiredName) {
+      void runTemporaryVoiceNameSync(state);
+    }
+  }
+}
+
 async function addTemporaryVoiceChannel(guildId, channelId, ownerId) {
   await store.updateGuild(guildId, (guildConfig) => {
     if (!guildConfig.voice) return;
@@ -2025,6 +2261,9 @@ async function addTemporaryVoiceChannel(guildId, channelId, ownerId) {
     guildConfig.voice.tempChannelOwners[channelId] = ownerId;
     guildConfig.voice.tempChannelWhitelists = guildConfig.voice.tempChannelWhitelists ?? {};
     guildConfig.voice.tempChannelWhitelists[channelId] = [];
+    guildConfig.voice.tempChannelPrivateStates =
+      guildConfig.voice.tempChannelPrivateStates ?? {};
+    guildConfig.voice.tempChannelPrivateStates[channelId] = false;
   });
 }
 
@@ -2040,7 +2279,14 @@ async function removeTemporaryVoiceChannel(guildId, channelId) {
     delete guildConfig.voice.tempChannelOwners[channelId];
     guildConfig.voice.tempChannelWhitelists = guildConfig.voice.tempChannelWhitelists ?? {};
     delete guildConfig.voice.tempChannelWhitelists[channelId];
+    guildConfig.voice.tempChannelPrivateStates =
+      guildConfig.voice.tempChannelPrivateStates ?? {};
+    delete guildConfig.voice.tempChannelPrivateStates[channelId];
   });
+
+  const renameState = voiceRenameStates.get(channelId);
+  if (renameState?.timer) clearTimeout(renameState.timer);
+  voiceRenameStates.delete(channelId);
 }
 
 async function createTemporaryVoiceForMember(newState, voiceConfig) {
@@ -2122,6 +2368,7 @@ async function cleanupTemporaryVoiceChannels() {
 
 client.once(Events.ClientReady, async (readyClient) => {
   console.log(`Connecté en tant que ${readyClient.user.tag}.`);
+  console.log(`Stockage de configuration actif : ${CONFIG_PATH}`);
   await cleanupTemporaryVoiceChannels();
 });
 
@@ -2305,6 +2552,23 @@ setInterval(() => {
 
 }, 60_000).unref();
 
+async function shutdown(signal) {
+  console.log(`${signal} reçu : sauvegarde de la configuration avant arrêt.`);
+  await store.save().catch((error) => {
+    console.error('Impossible de sauvegarder la configuration avant arrêt :', error);
+  });
+  client.destroy();
+  process.exit(0);
+}
+
+process.once('SIGTERM', () => {
+  void shutdown('SIGTERM');
+});
+
+process.once('SIGINT', () => {
+  void shutdown('SIGINT');
+});
+
 process.on('unhandledRejection', (error) => {
   console.error('Promesse rejetée non gérée :', error);
 });
@@ -2319,11 +2583,14 @@ if (require.main === module) {
 }
 
 module.exports = {
+  ConfigStore,
   buildBasicRoleSetupPanel,
   buildCaptchaSetupPanel,
   buildPrivateVoiceOverwrites,
   buildSetVocPanel,
+  buildSyncedVoiceOverwrites,
   buildWhitelistPanel,
+  replacePermissionOverwritesFast,
   buildVoiceSetupPanel,
   buildWelcomeSetupPanel,
   cleanVoiceChannelName,
@@ -2333,6 +2600,7 @@ module.exports = {
   formatVoiceLimit,
   getTemporaryVoiceWhitelist,
   isTemporaryVoicePrivate,
+  setTemporaryVoicePrivateState,
   temporaryVoiceNameForVisibility,
   uniqueSnowflakes,
   verificationPanel,
