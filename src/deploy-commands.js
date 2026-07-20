@@ -29,12 +29,14 @@ function buildCommands() {
 
     new SlashCommandBuilder()
       .setName('setvoc')
-      .setDescription('Modifie la visibilité et la limite de ton vocal temporaire.')
+      .setDescription('Paramétrez votre salon vocal.')
       .setDMPermission(false),
 
     new SlashCommandBuilder()
       .setName('rolebasique')
-      .setDescription('Configure le rôle attribué automatiquement aux nouveaux membres.')
+      .setDescription(
+        'Configure le rôle attribué automatiquement aux nouveaux membres.',
+      )
       .setDefaultMemberPermissions(adminOnly)
       .setDMPermission(false),
   ].map((command) => command.toJSON());
@@ -46,11 +48,14 @@ async function deployCommands() {
   const guildId = process.env.GUILD_ID?.trim();
 
   if (!token || !clientId) {
-    throw new Error('DISCORD_TOKEN et CLIENT_ID doivent être renseignés dans le fichier .env.');
+    throw new Error(
+      'DISCORD_TOKEN et CLIENT_ID doivent être renseignés dans le fichier .env.',
+    );
   }
 
   const commands = buildCommands();
   const rest = new REST({ version: '10' }).setToken(token);
+
   const route = guildId
     ? Routes.applicationGuildCommands(clientId, guildId)
     : Routes.applicationCommands(clientId);
@@ -61,7 +66,10 @@ async function deployCommands() {
       : 'Déploiement global des commandes...',
   );
 
-  const data = await rest.put(route, { body: commands });
+  const data = await rest.put(route, {
+    body: commands,
+  });
+
   console.log(`${data.length} commande(s) déployée(s) avec succès.`);
 }
 
@@ -72,4 +80,7 @@ if (require.main === module) {
   });
 }
 
-module.exports = { buildCommands, deployCommands };
+module.exports = {
+  buildCommands,
+  deployCommands,
+};
