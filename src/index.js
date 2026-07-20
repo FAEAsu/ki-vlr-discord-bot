@@ -4,6 +4,7 @@ const path = require('node:path');
 const zlib = require('node:zlib');
 const {
   ActionRowBuilder,
+  ActivityType,
   AttachmentBuilder,
   ButtonBuilder,
   ButtonStyle,
@@ -2369,6 +2370,18 @@ async function cleanupTemporaryVoiceChannels() {
 client.once(Events.ClientReady, async (readyClient) => {
   console.log(`Connecté en tant que ${readyClient.user.tag}.`);
   console.log(`Stockage de configuration actif : ${CONFIG_PATH}`);
+
+  readyClient.user.setPresence({
+    status: 'online',
+    activities: [
+      {
+        name: BRAND,
+        type: ActivityType.Custom,
+        state: 'Version 1.3.0',
+      },
+    ],
+  });
+
   await cleanupTemporaryVoiceChannels();
 });
 
