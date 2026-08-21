@@ -45,7 +45,14 @@ function buildCommands() {
 async function deployCommands() {
   const token = process.env.DISCORD_TOKEN;
   const clientId = process.env.CLIENT_ID;
-  const guildId = process.env.GUILD_ID?.trim();
+  const mainGuildId = process.env.GUILD_ID?.trim();
+
+  const guildIds = [
+    mainGuildId,
+    '1540134336588947647',
+  ].filter(Boolean);
+
+  const uniqueGuildIds = [...new Set(guildIds)];
 
   if (!token || !clientId) {
     throw new Error(
@@ -53,24 +60,31 @@ async function deployCommands() {
     );
   }
 
+  if (!mainGuildId) {
+    throw new Error(
+      'GUILD_ID doit contenir l’identifiant de ton serveur principal.',
+    );
+  }
+
   const commands = buildCommands();
   const rest = new REST({ version: '10' }).setToken(token);
 
-  const route = guildId
-    ? Routes.applicationGuildCommands(clientId, guildId)
-    : Routes.applicationCommands(clientId);
+  for (const guildId of uniqueGuildIds) {
+    console.log(`Déploiement des commandes sur le serveur ${guildId}...`);
 
-  console.log(
-    guildId
-      ? `Déploiement des commandes sur le serveur ${guildId}...`
-      : 'Déploiement global des commandes...',
-  );
+    const data = await rest.put(
+      Routes.applicationGuildCommands(clientId, guildId),
+      {
+        body: commands,
+      },
+    );
 
-  const data = await rest.put(route, {
-    body: commands,
-  });
+    console.log(
+      `${data.length} commande(s) déployée(s) sur ${guildId} avec succès.`,
+    );
+  }
 
-  console.log(`${data.length} commande(s) déployée(s) avec succès.`);
+  console.log('Déploiement terminé sur tous les serveurs.');
 }
 
 if (require.main === module) {
