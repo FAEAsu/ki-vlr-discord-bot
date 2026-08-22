@@ -39,6 +39,11 @@ function buildCommands() {
       )
       .setDefaultMemberPermissions(adminOnly)
       .setDMPermission(false),
+
+    new SlashCommandBuilder()
+      .setName('maproulette')
+      .setDescription('Tire aléatoirement une map de VALORANT.')
+      .setDMPermission(false),
   ].map((command) => command.toJSON());
 }
 
@@ -67,29 +72,50 @@ async function deployCommands() {
   }
 
   const commands = buildCommands();
-  const rest = new REST({ version: '10' }).setToken(token);
+
+  const rest = new REST({
+    version: '10',
+  }).setToken(token);
 
   for (const guildId of uniqueGuildIds) {
-    console.log(`Déploiement des commandes sur le serveur ${guildId}...`);
-
-    const data = await rest.put(
-      Routes.applicationGuildCommands(clientId, guildId),
-      {
-        body: commands,
-      },
-    );
-
     console.log(
-      `${data.length} commande(s) déployée(s) sur ${guildId} avec succès.`,
+      `Déploiement des commandes sur le serveur ${guildId}...`,
     );
+
+    try {
+      const data = await rest.put(
+        Routes.applicationGuildCommands(
+          clientId,
+          guildId,
+        ),
+        {
+          body: commands,
+        },
+      );
+
+      console.log(
+        `${data.length} commande(s) déployée(s) sur ${guildId} avec succès.`,
+      );
+    } catch (error) {
+      console.error(
+        `Erreur pendant le déploiement sur ${guildId} :`,
+        error,
+      );
+    }
   }
 
-  console.log('Déploiement terminé sur tous les serveurs.');
+  console.log(
+    'Déploiement terminé sur tous les serveurs.',
+  );
 }
 
 if (require.main === module) {
   deployCommands().catch((error) => {
-    console.error('Impossible de déployer les commandes :', error);
+    console.error(
+      'Impossible de déployer les commandes :',
+      error,
+    );
+
     process.exitCode = 1;
   });
 }
