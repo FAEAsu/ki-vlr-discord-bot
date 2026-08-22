@@ -1,12 +1,3 @@
-
-montre moi le code dirrectement
-
-mon bot crash
-
-Oui, je vois exactement le problème sur ton log.
-
-Le deployCommands fonctionne : les 6 commandes sont bien déployées. Le crash vient ensuite de src/index.js, à la ligne 679 :
-
 const crypto = require('node:crypto');
 Node indique :
 
