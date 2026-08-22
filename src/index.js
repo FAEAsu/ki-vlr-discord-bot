@@ -2401,7 +2401,7 @@ async function handleMapRouletteCommand(interaction) {
     .setColor(0xff4655)
     .setTitle('🎲 Map Roulette')
     .setDescription(`La map tirée au sort est :\n\n# **${selectedMap}**`)
-    .setFooter({ text: `${VALORANT_MAPS.length} maps possibles • ${BRAND}` });
+    .setFooter({ text: `${VALORANT_MAPS.length} maps possibles •` });
 
   await interaction.reply({ embeds: [embed] });
 }
