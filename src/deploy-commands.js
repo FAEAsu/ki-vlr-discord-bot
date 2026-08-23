@@ -6,30 +6,45 @@ const {
 } = require('discord.js');
 
 function buildCommands() {
-  const adminOnly = PermissionFlagsBits.Administrator;
+  const adminOnly =
+    PermissionFlagsBits.Administrator;
 
   return [
     new SlashCommandBuilder()
       .setName('captcha')
-      .setDescription('Configure le panneau de vérification par captcha.')
-      .setDefaultMemberPermissions(adminOnly)
+      .setDescription(
+        'Configure le panneau de vérification par captcha.',
+      )
+      .setDefaultMemberPermissions(
+        adminOnly,
+      )
       .setDMPermission(false),
 
     new SlashCommandBuilder()
       .setName('welcome')
-      .setDescription('Configure le salon des messages de bienvenue.')
-      .setDefaultMemberPermissions(adminOnly)
+      .setDescription(
+        'Configure le salon des messages de bienvenue.',
+      )
+      .setDefaultMemberPermissions(
+        adminOnly,
+      )
       .setDMPermission(false),
 
     new SlashCommandBuilder()
       .setName('voc')
-      .setDescription('Configure la création automatique de vocaux temporaires.')
-      .setDefaultMemberPermissions(adminOnly)
+      .setDescription(
+        'Configure la création automatique de vocaux temporaires.',
+      )
+      .setDefaultMemberPermissions(
+        adminOnly,
+      )
       .setDMPermission(false),
 
     new SlashCommandBuilder()
       .setName('setvoc')
-      .setDescription('Paramétrez votre salon vocal.')
+      .setDescription(
+        'Paramétrez votre salon vocal.',
+      )
       .setDMPermission(false),
 
     new SlashCommandBuilder()
@@ -37,71 +52,156 @@ function buildCommands() {
       .setDescription(
         'Configure le rôle attribué automatiquement aux nouveaux membres.',
       )
-      .setDefaultMemberPermissions(adminOnly)
+      .setDefaultMemberPermissions(
+        adminOnly,
+      )
       .setDMPermission(false),
 
     new SlashCommandBuilder()
       .setName('maproulette')
-      .setDescription('Tire aléatoirement une map de VALORANT.')
+      .setDescription(
+        'Tire aléatoirement une map de VALORANT.',
+      )
       .setDMPermission(false),
-  ].map((command) => command.toJSON());
+
+    new SlashCommandBuilder()
+      .setName('teamcreate')
+      .setDescription(
+        'Crée une équipe temporaire pour le tournoi.',
+      )
+      .addStringOption(
+        (option) =>
+          option
+            .setName('nom')
+            .setDescription(
+              'Nom ou numéro de l’équipe, par exemple 1 ou Team Alpha.',
+            )
+            .setRequired(true)
+            .setMaxLength(70),
+      )
+      .setDMPermission(false),
+
+    new SlashCommandBuilder()
+      .setName('teamadd')
+      .setDescription(
+        'Ajoute un ou plusieurs joueurs à une équipe.',
+      )
+      .setDMPermission(false),
+
+    new SlashCommandBuilder()
+      .setName('teamsee')
+      .setDescription(
+        'Affiche toutes les équipes et leurs joueurs.',
+      )
+      .setDMPermission(false),
+
+    new SlashCommandBuilder()
+      .setName('myteam')
+      .setDescription(
+        'Affiche ton équipe actuelle.',
+      )
+      .setDMPermission(false),
+
+    new SlashCommandBuilder()
+      .setName('tournoistart')
+      .setDescription(
+        'Démarre le tournoi et crée les salons vocaux.',
+      )
+      .setDMPermission(false),
+
+    new SlashCommandBuilder()
+      .setName('tournoipermconfig')
+      .setDescription(
+        'Configure les rôles autorisés à utiliser les commandes tournoi.',
+      )
+      .setDefaultMemberPermissions(
+        adminOnly,
+      )
+      .setDMPermission(false),
+
+    new SlashCommandBuilder()
+      .setName('tournoiend')
+      .setDescription(
+        'Termine le tournoi et supprime ses équipes, rôles et salons.',
+      )
+      .setDMPermission(false),
+  ].map(
+    (command) =>
+      command.toJSON(),
+  );
 }
 
 async function deployCommands() {
-  const token = process.env.DISCORD_TOKEN;
-  const clientId = process.env.CLIENT_ID;
-  const mainGuildId = process.env.GUILD_ID?.trim();
+  const token =
+    process.env.DISCORD_TOKEN;
+
+  const clientId =
+    process.env.CLIENT_ID;
+
+  const mainGuildId =
+    process.env.GUILD_ID?.trim();
 
   const guildIds = [
     mainGuildId,
     '1540134336588947647',
   ].filter(Boolean);
 
-  const uniqueGuildIds = [...new Set(guildIds)];
+  const uniqueGuildIds = [
+    ...new Set(
+      guildIds,
+    ),
+  ];
 
-  if (!token || !clientId) {
+  if (
+    !token ||
+    !clientId
+  ) {
     throw new Error(
       'DISCORD_TOKEN et CLIENT_ID doivent être renseignés dans le fichier .env.',
     );
   }
 
-  if (!mainGuildId) {
+  if (
+    !mainGuildId
+  ) {
     throw new Error(
       'GUILD_ID doit contenir l’identifiant de ton serveur principal.',
     );
   }
 
-  const commands = buildCommands();
+  const commands =
+    buildCommands();
 
-  const rest = new REST({
-    version: '10',
-  }).setToken(token);
+  const rest =
+    new REST({
+      version: '10',
+    }).setToken(
+      token,
+    );
 
-  for (const guildId of uniqueGuildIds) {
+  for (
+    const guildId
+    of uniqueGuildIds
+  ) {
     console.log(
       `Déploiement des commandes sur le serveur ${guildId}...`,
     );
 
-    try {
-      const data = await rest.put(
+    const data =
+      await rest.put(
         Routes.applicationGuildCommands(
           clientId,
           guildId,
         ),
         {
-          body: commands,
+          body:
+            commands,
         },
       );
 
-      console.log(
-        `${data.length} commande(s) déployée(s) sur ${guildId} avec succès.`,
-      );
-    } catch (error) {
-      console.error(
-        `Erreur pendant le déploiement sur ${guildId} :`,
-        error,
-      );
-    }
+    console.log(
+      `${data.length} commande(s) déployée(s) sur ${guildId} avec succès.`,
+    );
   }
 
   console.log(
@@ -109,15 +209,21 @@ async function deployCommands() {
   );
 }
 
-if (require.main === module) {
-  deployCommands().catch((error) => {
-    console.error(
-      'Impossible de déployer les commandes :',
-      error,
-    );
+if (
+  require.main === module
+) {
+  deployCommands()
+    .catch(
+      (error) => {
+        console.error(
+          'Impossible de déployer les commandes :',
+          error,
+        );
 
-    process.exitCode = 1;
-  });
+        process.exitCode =
+          1;
+      },
+    );
 }
 
 module.exports = {
