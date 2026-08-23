@@ -2660,3 +2660,2416 @@ module.exports = {
   uniqueSnowflakes,
   verificationPanel,
 };
+// ============================================================
+// MODULE TOURNOI — à coller TOUT EN BAS de src/index.js
+// ============================================================
+
+const TOURNOI_PATH = path.join(DATA_DIR, 'tournoi.json');
+const tournoiPanels = new Map();
+const TOURNOI_PANEL_TTL = 15 * 60 * 1000;
+
+const TOURNOI_PERM_COMMANDS = [
+  'teamcreate',
+  'teamadd',
+  'teamsee',
+  'myteam',
+  'tournoistart',
+  'tournoiend',
+];
+
+function newTournoiState() {
+  return {
+    teams: [],
+    permissions: {},
+    active: false,
+    categoryId: null,
+    specialChannelIds: [],
+  };
+}
+
+function loadTournoiDb() {
+  try {
+    fs.mkdirSync(path.dirname(TOURNOI_PATH), {
+      recursive: true,
+    });
+
+    if (!fs.existsSync(TOURNOI_PATH)) {
+      fs.writeFileSync(
+        TOURNOI_PATH,
+        '{}\n',
+        'utf8',
+      );
+    }
+
+    const raw = fs
+      .readFileSync(
+        TOURNOI_PATH,
+        'utf8',
+      )
+      .trim();
+
+    return raw
+      ? JSON.parse(raw)
+      : {};
+  } catch (error) {
+    console.error(
+      'Erreur chargement tournoi.json :',
+      error,
+    );
+
+    return {};
+  }
+}
+
+const tournoiDb =
+  loadTournoiDb();
+
+let tournoiWriteQueue =
+  Promise.resolve();
+
+function tournoiGuild(guildId) {
+  if (
+    !tournoiDb[guildId] ||
+    typeof tournoiDb[guildId] !==
+      'object'
+  ) {
+    tournoiDb[guildId] =
+      newTournoiState();
+  }
+
+  const data =
+    tournoiDb[guildId];
+
+  if (
+    !Array.isArray(data.teams)
+  ) {
+    data.teams = [];
+  }
+
+  if (
+    !data.permissions ||
+    typeof data.permissions !==
+      'object'
+  ) {
+    data.permissions = {};
+  }
+
+  if (
+    !Array.isArray(
+      data.specialChannelIds,
+    )
+  ) {
+    data.specialChannelIds = [];
+  }
+
+  if (
+    typeof data.active !==
+    'boolean'
+  ) {
+    data.active = false;
+  }
+
+  if (
+    !('categoryId' in data)
+  ) {
+    data.categoryId = null;
+  }
+
+  for (
+    const team
+    of data.teams
+  ) {
+    if (
+      !Array.isArray(
+        team.memberIds,
+      )
+    ) {
+      team.memberIds = [];
+    }
+
+    if (
+      !(
+        'voiceChannelId'
+        in team
+      )
+    ) {
+      team.voiceChannelId =
+        null;
+    }
+  }
+
+  return data;
+}
+
+async function saveTournoiDb() {
+  const snapshot =
+    JSON.stringify(
+      tournoiDb,
+      null,
+      2,
+    ) + '\n';
+
+  const tmp =
+    `${TOURNOI_PATH}.tmp`;
+
+  const operation =
+    tournoiWriteQueue
+      .catch(() => null)
+      .then(async () => {
+        await fs.promises.writeFile(
+          tmp,
+          snapshot,
+          'utf8',
+        );
+
+        await fs.promises
+          .rename(
+            tmp,
+            TOURNOI_PATH,
+          )
+          .catch(
+            async (error) => {
+              if (
+                ![
+                  'EEXIST',
+                  'EPERM',
+                ].includes(
+                  error.code,
+                )
+              ) {
+                throw error;
+              }
+
+              await fs.promises.copyFile(
+                tmp,
+                TOURNOI_PATH,
+              );
+
+              await fs.promises
+                .unlink(tmp)
+                .catch(
+                  () => null,
+                );
+            },
+          );
+      });
+
+  tournoiWriteQueue =
+    operation;
+
+  return operation;
+}
+
+function tournoiPanelKey(
+  type,
+  guildId,
+  userId,
+) {
+  return `${type}:${guildId}:${userId}`;
+}
+
+function createTournoiPanel(
+  type,
+  interaction,
+  values = {},
+) {
+  const panel = {
+    type,
+
+    guildId:
+      interaction.guildId,
+
+    ownerId:
+      interaction.user.id,
+
+    expiresAt:
+      Date.now() +
+      TOURNOI_PANEL_TTL,
+
+    ...values,
+  };
+
+  tournoiPanels.set(
+    tournoiPanelKey(
+      type,
+      interaction.guildId,
+      interaction.user.id,
+    ),
+    panel,
+  );
+
+  return panel;
+}
+
+function getTournoiPanel(
+  type,
+  guildId,
+  userId,
+) {
+  const key =
+    tournoiPanelKey(
+      type,
+      guildId,
+      userId,
+    );
+
+  const panel =
+    tournoiPanels.get(key);
+
+  if (
+    !panel ||
+    panel.expiresAt <
+      Date.now()
+  ) {
+    tournoiPanels.delete(
+      key,
+    );
+
+    return null;
+  }
+
+  panel.expiresAt =
+    Date.now() +
+    TOURNOI_PANEL_TTL;
+
+  return panel;
+}
+
+function deleteTournoiPanel(
+  type,
+  guildId,
+  userId,
+) {
+  tournoiPanels.delete(
+    tournoiPanelKey(
+      type,
+      guildId,
+      userId,
+    ),
+  );
+}
+
+function normalizeTournoiTeamName(
+  raw,
+) {
+  const value =
+    String(raw ?? '')
+      .replace(
+        /[\r\n\t]/g,
+        ' ',
+      )
+      .replace(
+        /\s+/g,
+        ' ',
+      )
+      .trim()
+      .slice(
+        0,
+        70,
+      );
+
+  if (!value) {
+    return null;
+  }
+
+  return /^team\s+/i.test(
+    value,
+  )
+    ? value
+    : `Team ${value}`;
+}
+
+function findTournoiTeam(
+  data,
+  teamId,
+) {
+  return (
+    data.teams.find(
+      (team) =>
+        team.id === teamId,
+    ) ?? null
+  );
+}
+
+function findMemberTournoiTeam(
+  data,
+  memberId,
+) {
+  return (
+    data.teams.find(
+      (team) =>
+        team.memberIds.includes(
+          memberId,
+        ),
+    ) ?? null
+  );
+}
+
+function tournoiCommandAllowed(
+  interaction,
+  commandName,
+) {
+  if (
+    !interaction.inGuild()
+  ) {
+    return false;
+  }
+
+  if (
+    isAdministrator(
+      interaction,
+    )
+  ) {
+    return true;
+  }
+
+  const data =
+    tournoiGuild(
+      interaction.guildId,
+    );
+
+  const roleIds =
+    Array.isArray(
+      data.permissions[
+        commandName
+      ],
+    )
+      ? data.permissions[
+          commandName
+        ]
+      : [];
+
+  if (!roleIds.length) {
+    return [
+      'teamsee',
+      'myteam',
+    ].includes(
+      commandName,
+    );
+  }
+
+  return roleIds.some(
+    (roleId) =>
+      interaction.member
+        ?.roles
+        ?.cache
+        ?.has(roleId),
+  );
+}
+
+async function requireTournoiCommand(
+  interaction,
+  commandName,
+) {
+  if (
+    tournoiCommandAllowed(
+      interaction,
+      commandName,
+    )
+  ) {
+    return true;
+  }
+
+  await interaction.reply({
+    content:
+      '❌ Tu n’as pas le rôle nécessaire pour utiliser cette commande.',
+
+    flags:
+      MessageFlags.Ephemeral,
+  });
+
+  return false;
+}
+
+async function ensureTournoiRole(
+  guild,
+  team,
+) {
+  let role =
+    team.roleId
+      ? await guild.roles
+          .fetch(
+            team.roleId,
+          )
+          .catch(
+            () => null,
+          )
+      : null;
+
+  if (role) {
+    return role;
+  }
+
+  role =
+    await guild.roles.create({
+      name:
+        team.name,
+
+      reason:
+        'Rôle temporaire du tournoi',
+    });
+
+  team.roleId =
+    role.id;
+
+  await saveTournoiDb();
+
+  return role;
+}
+
+function teamAddPanel(
+  guild,
+  panel,
+) {
+  const data =
+    tournoiGuild(
+      guild.id,
+    );
+
+  const selectedTeam =
+    panel.teamId
+      ? findTournoiTeam(
+          data,
+          panel.teamId,
+        )
+      : null;
+
+  const users =
+    Array.isArray(
+      panel.userIds,
+    )
+      ? panel.userIds
+      : [];
+
+  const embed =
+    new EmbedBuilder()
+      .setColor(
+        0xff4655,
+      )
+      .setTitle(
+        'Gestion des équipes',
+      )
+      .setDescription(
+        [
+          `**Équipe :** ${
+            selectedTeam
+              ? selectedTeam.name
+              : '`Non choisie`'
+          }`,
+
+          `**Joueurs :** ${
+            users.length
+              ? users
+                  .map(
+                    (id) =>
+                      `<@${id}>`,
+                  )
+                  .join(', ')
+              : '`Aucun`'
+          }`,
+
+          '',
+
+          'Choisis une équipe et les membres à ajouter, puis clique sur **Ajouter**.',
+        ].join(
+          '\n',
+        ),
+      );
+
+  const teamSelect =
+    new StringSelectMenuBuilder()
+      .setCustomId(
+        `tournoi:teamadd:team:${panel.ownerId}`,
+      )
+      .setPlaceholder(
+        'Choisir une équipe',
+      )
+      .setMinValues(1)
+      .setMaxValues(1)
+      .addOptions(
+        data.teams
+          .slice(
+            0,
+            25,
+          )
+          .map(
+            (team) => ({
+              label:
+                team.name.slice(
+                  0,
+                  100,
+                ),
+
+              value:
+                team.id,
+
+              description:
+                `${team.memberIds.length} joueur(s)`,
+
+              default:
+                team.id ===
+                panel.teamId,
+            }),
+          ),
+      );
+
+  const userSelect =
+    new UserSelectMenuBuilder()
+      .setCustomId(
+        `tournoi:teamadd:users:${panel.ownerId}`,
+      )
+      .setPlaceholder(
+        'Choisir un ou plusieurs membres',
+      )
+      .setMinValues(1)
+      .setMaxValues(25);
+
+  const buttons =
+    new ActionRowBuilder()
+      .addComponents(
+        new ButtonBuilder()
+          .setCustomId(
+            `tournoi:teamadd:save:${panel.ownerId}`,
+          )
+          .setLabel(
+            'Ajouter',
+          )
+          .setEmoji('✅')
+          .setStyle(
+            ButtonStyle.Success,
+          )
+          .setDisabled(
+            !panel.teamId ||
+            users.length ===
+              0,
+          ),
+
+        new ButtonBuilder()
+          .setCustomId(
+            `tournoi:teamadd:cancel:${panel.ownerId}`,
+          )
+          .setLabel(
+            'Annuler',
+          )
+          .setStyle(
+            ButtonStyle.Secondary,
+          ),
+      );
+
+  return {
+    embeds: [embed],
+
+    components: [
+      new ActionRowBuilder()
+        .addComponents(
+          teamSelect,
+        ),
+
+      new ActionRowBuilder()
+        .addComponents(
+          userSelect,
+        ),
+
+      buttons,
+    ],
+  };
+}
+
+function tournoiPermPanel(
+  guild,
+  panel,
+) {
+  const data =
+    tournoiGuild(
+      guild.id,
+    );
+
+  const commandName =
+    panel.commandName ??
+    null;
+
+  const current =
+    commandName &&
+    Array.isArray(
+      data.permissions[
+        commandName
+      ],
+    )
+      ? data.permissions[
+          commandName
+        ]
+      : [];
+
+  const selected =
+    Array.isArray(
+      panel.roleIds,
+    )
+      ? panel.roleIds
+      : [];
+
+  const embed =
+    new EmbedBuilder()
+      .setColor(
+        0x5865f2,
+      )
+      .setTitle(
+        'Permissions des commandes tournoi',
+      )
+      .setDescription(
+        [
+          `**Commande :** ${
+            commandName
+              ? `/${commandName}`
+              : '`Non choisie`'
+          }`,
+
+          `**Rôles actuels :** ${
+            current.length
+              ? current
+                  .map(
+                    (id) =>
+                      `<@&${id}>`,
+                  )
+                  .join(', ')
+              : '`Aucun`'
+          }`,
+
+          `**Nouvelle sélection :** ${
+            selected.length
+              ? selected
+                  .map(
+                    (id) =>
+                      `<@&${id}>`,
+                  )
+                  .join(', ')
+              : '`Aucune`'
+          }`,
+
+          '',
+
+          'Les administrateurs ont toujours accès. Sans configuration, `/teamsee` et `/myteam` sont publics ; les autres commandes tournoi sont réservées aux administrateurs.',
+        ].join(
+          '\n',
+        ),
+      );
+
+  const commandSelect =
+    new StringSelectMenuBuilder()
+      .setCustomId(
+        `tournoi:perm:command:${panel.ownerId}`,
+      )
+      .setPlaceholder(
+        'Choisir une commande',
+      )
+      .setMinValues(1)
+      .setMaxValues(1)
+      .addOptions(
+        TOURNOI_PERM_COMMANDS.map(
+          (name) => ({
+            label:
+              `/${name}`,
+
+            value:
+              name,
+
+            default:
+              name ===
+              commandName,
+          }),
+        ),
+      );
+
+  const roleSelect =
+    new RoleSelectMenuBuilder()
+      .setCustomId(
+        `tournoi:perm:roles:${panel.ownerId}`,
+      )
+      .setPlaceholder(
+        'Choisir un ou plusieurs rôles',
+      )
+      .setMinValues(1)
+      .setMaxValues(25)
+      .setDisabled(
+        !commandName,
+      );
+
+  const buttons =
+    new ActionRowBuilder()
+      .addComponents(
+        new ButtonBuilder()
+          .setCustomId(
+            `tournoi:perm:save:${panel.ownerId}`,
+          )
+          .setLabel(
+            'Enregistrer',
+          )
+          .setEmoji('💾')
+          .setStyle(
+            ButtonStyle.Success,
+          )
+          .setDisabled(
+            !commandName ||
+            selected.length ===
+              0,
+          ),
+
+        new ButtonBuilder()
+          .setCustomId(
+            `tournoi:perm:clear:${panel.ownerId}`,
+          )
+          .setLabel(
+            'Réinitialiser',
+          )
+          .setStyle(
+            ButtonStyle.Danger,
+          )
+          .setDisabled(
+            !commandName,
+          ),
+
+        new ButtonBuilder()
+          .setCustomId(
+            `tournoi:perm:cancel:${panel.ownerId}`,
+          )
+          .setLabel(
+            'Fermer',
+          )
+          .setStyle(
+            ButtonStyle.Secondary,
+          ),
+      );
+
+  return {
+    embeds: [embed],
+
+    components: [
+      new ActionRowBuilder()
+        .addComponents(
+          commandSelect,
+        ),
+
+      new ActionRowBuilder()
+        .addComponents(
+          roleSelect,
+        ),
+
+      buttons,
+    ],
+  };
+}
+
+async function tournoiTeamCreate(
+  interaction,
+) {
+  if (
+    !(
+      await requireTournoiCommand(
+        interaction,
+        'teamcreate',
+      )
+    )
+  ) {
+    return;
+  }
+
+  const data =
+    tournoiGuild(
+      interaction.guildId,
+    );
+
+  if (data.active) {
+    await interaction.reply({
+      content:
+        '❌ Le tournoi est déjà démarré.',
+
+      flags:
+        MessageFlags.Ephemeral,
+    });
+
+    return;
+  }
+
+  if (
+    data.teams.length >=
+    25
+  ) {
+    await interaction.reply({
+      content:
+        '❌ Limite de 25 équipes atteinte.',
+
+      flags:
+        MessageFlags.Ephemeral,
+    });
+
+    return;
+  }
+
+  const name =
+    normalizeTournoiTeamName(
+      interaction.options.getString(
+        'nom',
+        true,
+      ),
+    );
+
+  if (!name) {
+    await interaction.reply({
+      content:
+        '❌ Nom d’équipe invalide.',
+
+      flags:
+        MessageFlags.Ephemeral,
+    });
+
+    return;
+  }
+
+  if (
+    data.teams.some(
+      (team) =>
+        team.name.toLowerCase() ===
+        name.toLowerCase(),
+    )
+  ) {
+    await interaction.reply({
+      content:
+        `❌ **${name}** existe déjà.`,
+
+      flags:
+        MessageFlags.Ephemeral,
+    });
+
+    return;
+  }
+
+  if (
+    !interaction.guild.members.me
+      ?.permissions
+      .has(
+        PermissionFlagsBits.ManageRoles,
+      )
+  ) {
+    await interaction.reply({
+      content:
+        '❌ Le bot a besoin de **Gérer les rôles**.',
+
+      flags:
+        MessageFlags.Ephemeral,
+    });
+
+    return;
+  }
+
+  await interaction.deferReply({
+    flags:
+      MessageFlags.Ephemeral,
+  });
+
+  const role =
+    await interaction.guild
+      .roles
+      .create({
+        name,
+
+        reason:
+          `Équipe créée par ${interaction.user.tag}`,
+      });
+
+  data.teams.push({
+    id:
+      crypto.randomUUID(),
+
+    name,
+
+    roleId:
+      role.id,
+
+    memberIds: [],
+
+    voiceChannelId:
+      null,
+  });
+
+  await saveTournoiDb();
+
+  await interaction.editReply(
+    `✅ **${name}** créée avec le rôle ${role}.`,
+  );
+}
+
+async function tournoiTeamAdd(
+  interaction,
+) {
+  if (
+    !(
+      await requireTournoiCommand(
+        interaction,
+        'teamadd',
+      )
+    )
+  ) {
+    return;
+  }
+
+  const data =
+    tournoiGuild(
+      interaction.guildId,
+    );
+
+  if (
+    !data.teams.length
+  ) {
+    await interaction.reply({
+      content:
+        '❌ Aucune équipe. Utilise d’abord `/teamcreate`.',
+
+      flags:
+        MessageFlags.Ephemeral,
+    });
+
+    return;
+  }
+
+  const panel =
+    createTournoiPanel(
+      'teamadd',
+      interaction,
+      {
+        teamId: null,
+        userIds: [],
+      },
+    );
+
+  await interaction.reply({
+    ...teamAddPanel(
+      interaction.guild,
+      panel,
+    ),
+
+    flags:
+      MessageFlags.Ephemeral,
+  });
+}
+
+async function tournoiTeamSee(
+  interaction,
+) {
+  if (
+    !(
+      await requireTournoiCommand(
+        interaction,
+        'teamsee',
+      )
+    )
+  ) {
+    return;
+  }
+
+  const data =
+    tournoiGuild(
+      interaction.guildId,
+    );
+
+  if (
+    !data.teams.length
+  ) {
+    await interaction.reply({
+      content:
+        '❌ Aucune équipe n’a encore été créée.',
+
+      flags:
+        MessageFlags.Ephemeral,
+    });
+
+    return;
+  }
+
+  const embed =
+    new EmbedBuilder()
+      .setColor(
+        0xff4655,
+      )
+      .setTitle(
+        '🏆 Équipes du tournoi',
+      )
+      .setDescription(
+        `**${data.teams.length} équipe(s)**`,
+      );
+
+  for (
+    const team
+    of data.teams.slice(
+      0,
+      25,
+    )
+  ) {
+    embed.addFields({
+      name:
+        `${team.name} — ${team.memberIds.length} joueur(s)`,
+
+      value:
+        team.memberIds.length
+          ? team.memberIds
+              .map(
+                (id) =>
+                  `<@${id}>`,
+              )
+              .join('\n')
+              .slice(
+                0,
+                1024,
+              )
+          : '`Aucun joueur`',
+
+      inline: true,
+    });
+  }
+
+  await interaction.reply({
+    embeds: [embed],
+  });
+}
+
+async function tournoiMyTeam(
+  interaction,
+) {
+  if (
+    !(
+      await requireTournoiCommand(
+        interaction,
+        'myteam',
+      )
+    )
+  ) {
+    return;
+  }
+
+  const data =
+    tournoiGuild(
+      interaction.guildId,
+    );
+
+  const team =
+    findMemberTournoiTeam(
+      data,
+      interaction.user.id,
+    );
+
+  if (!team) {
+    await interaction.reply({
+      content:
+        '❌ Tu n’es dans aucune équipe.',
+
+      flags:
+        MessageFlags.Ephemeral,
+    });
+
+    return;
+  }
+
+  const embed =
+    new EmbedBuilder()
+      .setColor(
+        0xff4655,
+      )
+      .setTitle(
+        `🏆 ${team.name}`,
+      )
+      .setDescription(
+        team.memberIds.length
+          ? team.memberIds
+              .map(
+                (id) =>
+                  `<@${id}>`,
+              )
+              .join('\n')
+          : '`Aucun joueur`',
+      )
+      .setFooter({
+        text:
+          data.active
+            ? 'Tournoi en cours'
+            : 'Tournoi non démarré',
+      });
+
+  const components = [];
+
+  if (
+    team.voiceChannelId
+  ) {
+    const voice =
+      await interaction.guild
+        .channels
+        .fetch(
+          team.voiceChannelId,
+        )
+        .catch(
+          () => null,
+        );
+
+    if (voice) {
+      components.push(
+        new ActionRowBuilder()
+          .addComponents(
+            new ButtonBuilder()
+              .setLabel(
+                'Rejoindre le vocal de mon équipe',
+              )
+              .setEmoji('🔊')
+              .setStyle(
+                ButtonStyle.Link,
+              )
+              .setURL(
+                `https://discord.com/channels/${interaction.guildId}/${voice.id}`,
+              ),
+          ),
+      );
+    }
+  }
+
+  await interaction.reply({
+    embeds: [embed],
+
+    components,
+
+    flags:
+      MessageFlags.Ephemeral,
+  });
+}
+
+async function tournoiStart(
+  interaction,
+) {
+  if (
+    !(
+      await requireTournoiCommand(
+        interaction,
+        'tournoistart',
+      )
+    )
+  ) {
+    return;
+  }
+
+  const data =
+    tournoiGuild(
+      interaction.guildId,
+    );
+
+  if (data.active) {
+    await interaction.reply({
+      content:
+        '❌ Un tournoi est déjà en cours.',
+
+      flags:
+        MessageFlags.Ephemeral,
+    });
+
+    return;
+  }
+
+  if (
+    !data.teams.length
+  ) {
+    await interaction.reply({
+      content:
+        '❌ Crée au moins une équipe avant.',
+
+      flags:
+        MessageFlags.Ephemeral,
+    });
+
+    return;
+  }
+
+  const bot =
+    interaction.guild
+      .members.me;
+
+  if (
+    !bot?.permissions.has(
+      PermissionFlagsBits.ManageChannels,
+    ) ||
+    !bot.permissions.has(
+      PermissionFlagsBits.ManageRoles,
+    )
+  ) {
+    await interaction.reply({
+      content:
+        '❌ Le bot a besoin de **Gérer les salons** et **Gérer les rôles**.',
+
+      flags:
+        MessageFlags.Ephemeral,
+    });
+
+    return;
+  }
+
+  await interaction.deferReply({
+    flags:
+      MessageFlags.Ephemeral,
+  });
+
+  const guild =
+    interaction.guild;
+
+  let category = null;
+
+  const created = [];
+
+  try {
+    category =
+      await guild.channels
+        .create({
+          name:
+            '🏆 TOURNOI',
+
+          type:
+            ChannelType.GuildCategory,
+
+          reason:
+            `Tournoi démarré par ${interaction.user.tag}`,
+        });
+
+    const specials = [];
+
+    for (
+      const name
+      of [
+        '🎙️ Cast',
+        '🛠️ Organisation',
+        '🔊 Team Regroup',
+      ]
+    ) {
+      const channel =
+        await guild.channels
+          .create({
+            name,
+
+            type:
+              ChannelType.GuildVoice,
+
+            parent:
+              category.id,
+
+            reason:
+              'Salon du tournoi',
+          });
+
+      created.push(
+        channel.id,
+      );
+
+      specials.push(
+        channel.id,
+      );
+    }
+
+    for (
+      const team
+      of data.teams
+    ) {
+      const role =
+        await ensureTournoiRole(
+          guild,
+          team,
+        );
+
+      const voice =
+        await guild.channels
+          .create({
+            name:
+              `🔒 ${team.name}`.slice(
+                0,
+                100,
+              ),
+
+            type:
+              ChannelType.GuildVoice,
+
+            parent:
+              category.id,
+
+            permissionOverwrites:
+              [
+                {
+                  id:
+                    guild.roles
+                      .everyone
+                      .id,
+
+                  deny: [
+                    PermissionFlagsBits.ViewChannel,
+                    PermissionFlagsBits.Connect,
+                  ],
+                },
+
+                {
+                  id:
+                    role.id,
+
+                  allow: [
+                    PermissionFlagsBits.ViewChannel,
+                    PermissionFlagsBits.Connect,
+                    PermissionFlagsBits.Speak,
+                    PermissionFlagsBits.Stream,
+                  ],
+                },
+
+                {
+                  id:
+                    bot.id,
+
+                  allow: [
+                    PermissionFlagsBits.ViewChannel,
+                    PermissionFlagsBits.Connect,
+                    PermissionFlagsBits.ManageChannels,
+                    PermissionFlagsBits.MoveMembers,
+                  ],
+                },
+              ],
+
+            reason:
+              `Vocal privé de ${team.name}`,
+          });
+
+      created.push(
+        voice.id,
+      );
+
+      team.voiceChannelId =
+        voice.id;
+    }
+
+    data.active = true;
+
+    data.categoryId =
+      category.id;
+
+    data.specialChannelIds =
+      specials;
+
+    await saveTournoiDb();
+
+    await interaction.editReply(
+      `✅ Tournoi démarré : **${data.teams.length} vocaux d’équipe**, **Cast**, **Organisation** et **Team Regroup** créés.`,
+    );
+  } catch (error) {
+    console.error(
+      'Erreur démarrage tournoi :',
+      error,
+    );
+
+    for (
+      const id
+      of created.reverse()
+    ) {
+      const channel =
+        await guild.channels
+          .fetch(id)
+          .catch(
+            () => null,
+          );
+
+      if (channel) {
+        await channel
+          .delete(
+            'Annulation du tournoi',
+          )
+          .catch(
+            () => null,
+          );
+      }
+    }
+
+    if (category) {
+      await category
+        .delete(
+          'Annulation du tournoi',
+        )
+        .catch(
+          () => null,
+        );
+    }
+
+    for (
+      const team
+      of data.teams
+    ) {
+      team.voiceChannelId =
+        null;
+    }
+
+    data.active = false;
+
+    data.categoryId =
+      null;
+
+    data.specialChannelIds =
+      [];
+
+    await saveTournoiDb()
+      .catch(
+        () => null,
+      );
+
+    await interaction.editReply(
+      '❌ Impossible de démarrer le tournoi. Les salons créés pendant la tentative ont été nettoyés.',
+    );
+  }
+}
+
+async function tournoiPermConfig(
+  interaction,
+) {
+  if (
+    !interaction.inGuild() ||
+    !isAdministrator(
+      interaction,
+    )
+  ) {
+    await interaction.reply({
+      content:
+        '❌ Cette commande est réservée aux administrateurs.',
+
+      flags:
+        MessageFlags.Ephemeral,
+    });
+
+    return;
+  }
+
+  const panel =
+    createTournoiPanel(
+      'perm',
+      interaction,
+      {
+        commandName: null,
+        roleIds: [],
+      },
+    );
+
+  await interaction.reply({
+    ...tournoiPermPanel(
+      interaction.guild,
+      panel,
+    ),
+
+    flags:
+      MessageFlags.Ephemeral,
+  });
+}
+
+async function tournoiEnd(
+  interaction,
+) {
+  if (
+    !(
+      await requireTournoiCommand(
+        interaction,
+        'tournoiend',
+      )
+    )
+  ) {
+    return;
+  }
+
+  const data =
+    tournoiGuild(
+      interaction.guildId,
+    );
+
+  if (
+    !data.teams.length &&
+    !data.active &&
+    !data.categoryId
+  ) {
+    await interaction.reply({
+      content:
+        '❌ Aucun tournoi à supprimer.',
+
+      flags:
+        MessageFlags.Ephemeral,
+    });
+
+    return;
+  }
+
+  await interaction.deferReply({
+    flags:
+      MessageFlags.Ephemeral,
+  });
+
+  const guild =
+    interaction.guild;
+
+  const channelIds =
+    new Set([
+      ...data.specialChannelIds,
+
+      ...data.teams
+        .map(
+          (team) =>
+            team.voiceChannelId,
+        )
+        .filter(Boolean),
+    ]);
+
+  for (
+    const id
+    of channelIds
+  ) {
+    const channel =
+      await guild.channels
+        .fetch(id)
+        .catch(
+          () => null,
+        );
+
+    if (channel) {
+      await channel
+        .delete(
+          'Fin du tournoi',
+        )
+        .catch(
+          () => null,
+        );
+    }
+  }
+
+  if (data.categoryId) {
+    const category =
+      await guild.channels
+        .fetch(
+          data.categoryId,
+        )
+        .catch(
+          () => null,
+        );
+
+    if (category) {
+      await category
+        .delete(
+          'Fin du tournoi',
+        )
+        .catch(
+          () => null,
+        );
+    }
+  }
+
+  for (
+    const team
+    of data.teams
+  ) {
+    if (!team.roleId) {
+      continue;
+    }
+
+    const role =
+      await guild.roles
+        .fetch(
+          team.roleId,
+        )
+        .catch(
+          () => null,
+        );
+
+    if (
+      role?.editable
+    ) {
+      await role
+        .delete(
+          'Fin du tournoi',
+        )
+        .catch(
+          () => null,
+        );
+    }
+  }
+
+  const permissions =
+    data.permissions;
+
+  tournoiDb[
+    interaction.guildId
+  ] = newTournoiState();
+
+  tournoiDb[
+    interaction.guildId
+  ].permissions =
+    permissions;
+
+  await saveTournoiDb();
+
+  for (
+    const key
+    of [
+      ...tournoiPanels.keys(),
+    ]
+  ) {
+    if (
+      key.includes(
+        `:${interaction.guildId}:`,
+      )
+    ) {
+      tournoiPanels.delete(
+        key,
+      );
+    }
+  }
+
+  await interaction.editReply(
+    '✅ Tournoi terminé. Équipes, rôles temporaires et salons supprimés. Les permissions configurées ont été conservées.',
+  );
+}
+
+async function tournoiTeamSelect(
+  interaction,
+) {
+  const ownerId =
+    interaction.customId
+      .split(':')[3];
+
+  if (
+    interaction.user.id !==
+    ownerId
+  ) {
+    return;
+  }
+
+  const panel =
+    getTournoiPanel(
+      'teamadd',
+      interaction.guildId,
+      ownerId,
+    );
+
+  if (!panel) {
+    await interaction.reply({
+      content:
+        '⌛ Panneau expiré. Relance `/teamadd`.',
+
+      flags:
+        MessageFlags.Ephemeral,
+    });
+
+    return;
+  }
+
+  panel.teamId =
+    interaction.values[0];
+
+  await interaction.update(
+    teamAddPanel(
+      interaction.guild,
+      panel,
+    ),
+  );
+}
+
+async function tournoiUserSelect(
+  interaction,
+) {
+  const ownerId =
+    interaction.customId
+      .split(':')[3];
+
+  if (
+    interaction.user.id !==
+    ownerId
+  ) {
+    return;
+  }
+
+  const panel =
+    getTournoiPanel(
+      'teamadd',
+      interaction.guildId,
+      ownerId,
+    );
+
+  if (!panel) {
+    await interaction.reply({
+      content:
+        '⌛ Panneau expiré. Relance `/teamadd`.',
+
+      flags:
+        MessageFlags.Ephemeral,
+    });
+
+    return;
+  }
+
+  panel.userIds =
+    interaction.values.filter(
+      (id) =>
+        !interaction.users
+          .get(id)
+          ?.bot,
+    );
+
+  await interaction.update(
+    teamAddPanel(
+      interaction.guild,
+      panel,
+    ),
+  );
+}
+
+async function tournoiTeamAddButton(
+  interaction,
+) {
+  const parts =
+    interaction.customId
+      .split(':');
+
+  const action =
+    parts[2];
+
+  const ownerId =
+    parts[3];
+
+  if (
+    interaction.user.id !==
+    ownerId
+  ) {
+    return;
+  }
+
+  const panel =
+    getTournoiPanel(
+      'teamadd',
+      interaction.guildId,
+      ownerId,
+    );
+
+  if (!panel) {
+    await interaction.reply({
+      content:
+        '⌛ Panneau expiré. Relance `/teamadd`.',
+
+      flags:
+        MessageFlags.Ephemeral,
+    });
+
+    return;
+  }
+
+  if (
+    action === 'cancel'
+  ) {
+    deleteTournoiPanel(
+      'teamadd',
+      interaction.guildId,
+      ownerId,
+    );
+
+    await interaction.update({
+      content:
+        'Ajout annulé.',
+
+      embeds: [],
+
+      components: [],
+    });
+
+    return;
+  }
+
+  if (
+    action !== 'save' ||
+    !panel.teamId ||
+    !panel.userIds.length
+  ) {
+    return;
+  }
+
+  await interaction.deferUpdate();
+
+  const data =
+    tournoiGuild(
+      interaction.guildId,
+    );
+
+  const target =
+    findTournoiTeam(
+      data,
+      panel.teamId,
+    );
+
+  if (!target) {
+    await interaction.editReply({
+      content:
+        '❌ Cette équipe n’existe plus.',
+
+      embeds: [],
+
+      components: [],
+    });
+
+    return;
+  }
+
+  const targetRole =
+    await ensureTournoiRole(
+      interaction.guild,
+      target,
+    );
+
+  let count = 0;
+
+  for (
+    const userId
+    of panel.userIds
+  ) {
+    const member =
+      await interaction.guild
+        .members
+        .fetch(userId)
+        .catch(
+          () => null,
+        );
+
+    if (
+      !member ||
+      member.user.bot
+    ) {
+      continue;
+    }
+
+    for (
+      const team
+      of data.teams
+    ) {
+      if (
+        team.id ===
+          target.id ||
+        !team.memberIds.includes(
+          userId,
+        )
+      ) {
+        continue;
+      }
+
+      team.memberIds =
+        team.memberIds.filter(
+          (id) =>
+            id !== userId,
+        );
+
+      if (team.roleId) {
+        const oldRole =
+          await interaction.guild
+            .roles
+            .fetch(
+              team.roleId,
+            )
+            .catch(
+              () => null,
+            );
+
+        if (
+          oldRole &&
+          member.roles.cache.has(
+            oldRole.id,
+          )
+        ) {
+          await member.roles
+            .remove(
+              oldRole,
+              'Changement d’équipe',
+            )
+            .catch(
+              () => null,
+            );
+        }
+      }
+    }
+
+    if (
+      !target.memberIds.includes(
+        userId,
+      )
+    ) {
+      target.memberIds.push(
+        userId,
+      );
+    }
+
+    if (
+      !member.roles.cache.has(
+        targetRole.id,
+      )
+    ) {
+      await member.roles
+        .add(
+          targetRole,
+          `Ajout dans ${target.name}`,
+        )
+        .catch(
+          () => null,
+        );
+    }
+
+    count += 1;
+  }
+
+  await saveTournoiDb();
+
+  deleteTournoiPanel(
+    'teamadd',
+    interaction.guildId,
+    ownerId,
+  );
+
+  await interaction.editReply({
+    content:
+      `✅ **${count} joueur(s)** ajouté(s) à **${target.name}**.`,
+
+    embeds: [],
+
+    components: [],
+  });
+}
+
+async function tournoiPermCommandSelect(
+  interaction,
+) {
+  const ownerId =
+    interaction.customId
+      .split(':')[3];
+
+  if (
+    interaction.user.id !==
+      ownerId ||
+    !isAdministrator(
+      interaction,
+    )
+  ) {
+    return;
+  }
+
+  const panel =
+    getTournoiPanel(
+      'perm',
+      interaction.guildId,
+      ownerId,
+    );
+
+  if (!panel) {
+    await interaction.reply({
+      content:
+        '⌛ Panneau expiré. Relance `/tournoipermconfig`.',
+
+      flags:
+        MessageFlags.Ephemeral,
+    });
+
+    return;
+  }
+
+  panel.commandName =
+    interaction.values[0];
+
+  panel.roleIds = [];
+
+  await interaction.update(
+    tournoiPermPanel(
+      interaction.guild,
+      panel,
+    ),
+  );
+}
+
+async function tournoiPermRoleSelect(
+  interaction,
+) {
+  const ownerId =
+    interaction.customId
+      .split(':')[3];
+
+  if (
+    interaction.user.id !==
+      ownerId ||
+    !isAdministrator(
+      interaction,
+    )
+  ) {
+    return;
+  }
+
+  const panel =
+    getTournoiPanel(
+      'perm',
+      interaction.guildId,
+      ownerId,
+    );
+
+  if (!panel) {
+    await interaction.reply({
+      content:
+        '⌛ Panneau expiré. Relance `/tournoipermconfig`.',
+
+      flags:
+        MessageFlags.Ephemeral,
+    });
+
+    return;
+  }
+
+  panel.roleIds = [
+    ...new Set(
+      interaction.values,
+    ),
+  ];
+
+  await interaction.update(
+    tournoiPermPanel(
+      interaction.guild,
+      panel,
+    ),
+  );
+}
+
+async function tournoiPermButton(
+  interaction,
+) {
+  const parts =
+    interaction.customId
+      .split(':');
+
+  const action =
+    parts[2];
+
+  const ownerId =
+    parts[3];
+
+  if (
+    interaction.user.id !==
+      ownerId ||
+    !isAdministrator(
+      interaction,
+    )
+  ) {
+    return;
+  }
+
+  const panel =
+    getTournoiPanel(
+      'perm',
+      interaction.guildId,
+      ownerId,
+    );
+
+  if (!panel) {
+    await interaction.reply({
+      content:
+        '⌛ Panneau expiré. Relance `/tournoipermconfig`.',
+
+      flags:
+        MessageFlags.Ephemeral,
+    });
+
+    return;
+  }
+
+  if (
+    action === 'cancel'
+  ) {
+    deleteTournoiPanel(
+      'perm',
+      interaction.guildId,
+      ownerId,
+    );
+
+    await interaction.update({
+      content:
+        'Panneau fermé.',
+
+      embeds: [],
+
+      components: [],
+    });
+
+    return;
+  }
+
+  if (
+    !panel.commandName
+  ) {
+    return;
+  }
+
+  const data =
+    tournoiGuild(
+      interaction.guildId,
+    );
+
+  if (
+    action === 'clear'
+  ) {
+    data.permissions[
+      panel.commandName
+    ] = [];
+
+    panel.roleIds = [];
+
+    await saveTournoiDb();
+
+    await interaction.update(
+      tournoiPermPanel(
+        interaction.guild,
+        panel,
+      ),
+    );
+
+    return;
+  }
+
+  if (
+    action === 'save' &&
+    panel.roleIds.length
+  ) {
+    data.permissions[
+      panel.commandName
+    ] = [
+      ...new Set(
+        panel.roleIds,
+      ),
+    ];
+
+    panel.roleIds = [];
+
+    await saveTournoiDb();
+
+    await interaction.update(
+      tournoiPermPanel(
+        interaction.guild,
+        panel,
+      ),
+    );
+  }
+}
+
+// Le handler existant envoie toutes les commandes inconnues vers handleAdminCommand.
+// On l’étend ici sans toucher au reste de ton index.js.
+
+const handleAdminCommandAvantTournoi =
+  handleAdminCommand;
+
+handleAdminCommand =
+  async function handleAdminCommandAvecTournoi(
+    interaction,
+  ) {
+    if (
+      interaction.commandName ===
+      'teamcreate'
+    ) {
+      return tournoiTeamCreate(
+        interaction,
+      );
+    }
+
+    if (
+      interaction.commandName ===
+      'teamadd'
+    ) {
+      return tournoiTeamAdd(
+        interaction,
+      );
+    }
+
+    if (
+      interaction.commandName ===
+      'teamsee'
+    ) {
+      return tournoiTeamSee(
+        interaction,
+      );
+    }
+
+    if (
+      interaction.commandName ===
+      'myteam'
+    ) {
+      return tournoiMyTeam(
+        interaction,
+      );
+    }
+
+    if (
+      interaction.commandName ===
+      'tournoistart'
+    ) {
+      return tournoiStart(
+        interaction,
+      );
+    }
+
+    if (
+      interaction.commandName ===
+      'tournoipermconfig'
+    ) {
+      return tournoiPermConfig(
+        interaction,
+      );
+    }
+
+    if (
+      interaction.commandName ===
+      'tournoiend'
+    ) {
+      return tournoiEnd(
+        interaction,
+      );
+    }
+
+    return handleAdminCommandAvantTournoi(
+      interaction,
+    );
+  };
+
+// Les menus/boutons du module tournoi ont leur propre listener.
+
+client.on(
+  Events.InteractionCreate,
+  async (interaction) => {
+    try {
+      if (
+        interaction.isStringSelectMenu() &&
+        interaction.customId.startsWith(
+          'tournoi:teamadd:team:',
+        )
+      ) {
+        await tournoiTeamSelect(
+          interaction,
+        );
+
+        return;
+      }
+
+      if (
+        interaction.isUserSelectMenu() &&
+        interaction.customId.startsWith(
+          'tournoi:teamadd:users:',
+        )
+      ) {
+        await tournoiUserSelect(
+          interaction,
+        );
+
+        return;
+      }
+
+      if (
+        interaction.isStringSelectMenu() &&
+        interaction.customId.startsWith(
+          'tournoi:perm:command:',
+        )
+      ) {
+        await tournoiPermCommandSelect(
+          interaction,
+        );
+
+        return;
+      }
+
+      if (
+        interaction.isRoleSelectMenu() &&
+        interaction.customId.startsWith(
+          'tournoi:perm:roles:',
+        )
+      ) {
+        await tournoiPermRoleSelect(
+          interaction,
+        );
+
+        return;
+      }
+
+      if (
+        interaction.isButton() &&
+        interaction.customId.startsWith(
+          'tournoi:teamadd:',
+        )
+      ) {
+        await tournoiTeamAddButton(
+          interaction,
+        );
+
+        return;
+      }
+
+      if (
+        interaction.isButton() &&
+        interaction.customId.startsWith(
+          'tournoi:perm:',
+        )
+      ) {
+        await tournoiPermButton(
+          interaction,
+        );
+      }
+    } catch (error) {
+      console.error(
+        'Erreur module tournoi :',
+        error,
+      );
+
+      const payload = {
+        content:
+          '❌ Une erreur est survenue dans le module tournoi.',
+
+        flags:
+          MessageFlags.Ephemeral,
+      };
+
+      if (
+        interaction.deferred ||
+        interaction.replied
+      ) {
+        await interaction
+          .followUp(
+            payload,
+          )
+          .catch(
+            () => null,
+          );
+      } else {
+        await interaction
+          .reply(
+            payload,
+          )
+          .catch(
+            () => null,
+          );
+      }
+    }
+  },
+);
+
+setInterval(
+  () => {
+    const now =
+      Date.now();
+
+    for (
+      const [
+        key,
+        panel,
+      ]
+      of tournoiPanels
+    ) {
+      if (
+        panel.expiresAt <
+        now
+      ) {
+        tournoiPanels.delete(
+          key,
+        );
+      }
+    }
+  },
+  60_000,
+).unref();
