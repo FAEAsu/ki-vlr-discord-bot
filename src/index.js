@@ -2417,7 +2417,7 @@ client.once(Events.ClientReady, async (readyClient) => {
       {
         name: BRAND,
         type: ActivityType.Custom,
-        state: 'Version 1.3.0',
+        state: 'Version 2.0.0 | Dev by @Asu',
       },
     ],
   });
