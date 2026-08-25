@@ -11,61 +11,45 @@ function buildCommands() {
   return [
     new SlashCommandBuilder()
       .setName('captcha')
-      .setDescription(
-        'Configure le panneau de vérification par captcha.',
-      )
+      .setDescription('Configure le panneau de vérification par captcha.')
       .setDefaultMemberPermissions(adminOnly)
       .setDMPermission(false),
 
     new SlashCommandBuilder()
       .setName('welcome')
-      .setDescription(
-        'Configure le salon des messages de bienvenue.',
-      )
+      .setDescription('Configure le salon des messages de bienvenue.')
       .setDefaultMemberPermissions(adminOnly)
       .setDMPermission(false),
 
     new SlashCommandBuilder()
       .setName('voc')
-      .setDescription(
-        'Configure la création automatique de vocaux temporaires.',
-      )
+      .setDescription('Configure la création automatique de vocaux temporaires.')
       .setDefaultMemberPermissions(adminOnly)
       .setDMPermission(false),
 
     new SlashCommandBuilder()
       .setName('setvoc')
-      .setDescription(
-        'Paramétrez votre salon vocal.',
-      )
+      .setDescription('Paramétrez votre salon vocal.')
       .setDMPermission(false),
 
     new SlashCommandBuilder()
       .setName('rolebasique')
-      .setDescription(
-        'Configure le rôle attribué automatiquement aux nouveaux membres.',
-      )
+      .setDescription('Configure le rôle attribué automatiquement aux nouveaux membres.')
       .setDefaultMemberPermissions(adminOnly)
       .setDMPermission(false),
 
     new SlashCommandBuilder()
       .setName('maproulette')
-      .setDescription(
-        'Tire aléatoirement une map de VALORANT.',
-      )
+      .setDescription('Tire aléatoirement une map de VALORANT.')
       .setDMPermission(false),
 
     new SlashCommandBuilder()
       .setName('teamcreate')
-      .setDescription(
-        'Crée une équipe temporaire pour le tournoi.',
-      )
+      .setDescription('Crée une équipe temporaire pour le tournoi.')
       .addStringOption((option) =>
         option
           .setName('nom')
-          .setDescription(
-            'Nom ou numéro de l’équipe, par exemple 1 ou Team Alpha.',
-          )
+          .setDescription('Nom ou numéro de l’équipe, par exemple 1 ou Team Alpha.')
           .setRequired(true)
           .setMaxLength(70),
       )
@@ -73,52 +57,43 @@ function buildCommands() {
 
     new SlashCommandBuilder()
       .setName('teamadd')
-      .setDescription(
-        'Ajoute un ou plusieurs joueurs à une équipe.',
-      )
+      .setDescription('Ajoute un ou plusieurs joueurs à une équipe.')
       .setDMPermission(false),
 
     new SlashCommandBuilder()
       .setName('teamsee')
-      .setDescription(
-        'Affiche toutes les équipes et leurs joueurs.',
-      )
+      .setDescription('Affiche toutes les équipes et leurs joueurs.')
       .setDMPermission(false),
 
     new SlashCommandBuilder()
       .setName('myteam')
-      .setDescription(
-        'Affiche ton équipe actuelle.',
-      )
+      .setDescription('Affiche ton équipe actuelle.')
       .setDMPermission(false),
 
     new SlashCommandBuilder()
       .setName('tournoistart')
-      .setDescription(
-        'Démarre le tournoi et crée les salons vocaux.',
-      )
+      .setDescription('Démarre le tournoi et crée les salons vocaux.')
       .setDMPermission(false),
 
     new SlashCommandBuilder()
       .setName('tournoipermconfig')
-      .setDescription(
-        'Configure les rôles autorisés à utiliser les commandes tournoi.',
-      )
+      .setDescription('Configure les rôles autorisés à utiliser les commandes tournoi.')
       .setDefaultMemberPermissions(adminOnly)
       .setDMPermission(false),
 
     new SlashCommandBuilder()
       .setName('tournoiend')
-      .setDescription(
-        'Termine le tournoi et supprime ses équipes, rôles et salons.',
-      )
+      .setDescription('Termine le tournoi et supprime ses équipes, rôles et salons.')
       .setDMPermission(false),
 
     new SlashCommandBuilder()
       .setName('unban')
-      .setDescription(
-        'Ouvre le panneau de débannissement.',
-      )
+      .setDescription('Ouvre le panneau de débannissement.')
+      .setDMPermission(false),
+
+    new SlashCommandBuilder()
+      .setName('servlist')
+      .setDescription('Affiche les serveurs où le bot est présent.')
       .setDMPermission(false),
   ].map((command) => command.toJSON());
 }
@@ -133,13 +108,11 @@ async function deployCommands() {
     '1540134336588947647',
   ].filter(Boolean);
 
-  const uniqueGuildIds = [
-    ...new Set(guildIds),
-  ];
+  const uniqueGuildIds = [...new Set(guildIds)];
 
   if (!token || !clientId) {
     throw new Error(
-      'DISCORD_TOKEN et CLIENT_ID doivent être renseignés dans le fichier .env.',
+      'DISCORD_TOKEN et CLIENT_ID doivent être renseignés dans les variables d’environnement.',
     );
   }
 
@@ -155,12 +128,17 @@ async function deployCommands() {
     version: '10',
   }).setToken(token);
 
-  for (const guildId of uniqueGuildIds) {
-    console.log(
-      `Déploiement des commandes sur le serveur ${guildId}...`,
-    );
+  console.log('========================================');
+  console.log(`Commandes à déployer : ${commands.length}`);
+  console.log(`Serveurs ciblés : ${uniqueGuildIds.length}`);
+  console.log('========================================');
 
+  for (const guildId of uniqueGuildIds) {
     try {
+      console.log(
+        `Déploiement des commandes sur le serveur ${guildId}...`,
+      );
+
       const data = await rest.put(
         Routes.applicationGuildCommands(
           clientId,
@@ -172,19 +150,19 @@ async function deployCommands() {
       );
 
       console.log(
-        `${data.length} commande(s) déployée(s) sur ${guildId} avec succès.`,
+        `✅ ${data.length} commande(s) déployée(s) sur ${guildId}.`,
       );
     } catch (error) {
       console.error(
-        `Erreur pendant le déploiement sur ${guildId} :`,
+        `❌ Impossible de déployer les commandes sur ${guildId} :`,
         error,
       );
     }
   }
 
-  console.log(
-    'Déploiement terminé sur tous les serveurs.',
-  );
+  console.log('========================================');
+  console.log('Déploiement des commandes terminé.');
+  console.log('========================================');
 }
 
 if (require.main === module) {
