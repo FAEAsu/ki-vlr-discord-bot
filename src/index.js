@@ -5073,7 +5073,6 @@ setInterval(
   },
   60_000,
 ).unref();
-
 // ============================================================
 // /unban — panneau de self-unban multi-serveurs
 // ============================================================
@@ -5085,29 +5084,22 @@ function getUnbanAuthorizedUserId() {
 }
 
 async function checkUnbanOwner(interaction) {
-  const authorizedUserId =
-    getUnbanAuthorizedUserId();
+  const authorizedUserId = getUnbanAuthorizedUserId();
 
   if (!authorizedUserId) {
     await interaction.reply({
       content:
         '❌ `UNBAN_OWNER_ID` n’est pas configuré dans les variables d’environnement.',
-      flags:
-        MessageFlags.Ephemeral,
+      flags: MessageFlags.Ephemeral,
     });
 
     return false;
   }
 
-  if (
-    interaction.user.id !==
-    authorizedUserId
-  ) {
+  if (interaction.user.id !== authorizedUserId) {
     await interaction.reply({
-      content:
-        '❌ Cette commande ne t’est pas autorisée.',
-      flags:
-        MessageFlags.Ephemeral,
+      content: '❌ Cette commande ne t’est pas autorisée.',
+      flags: MessageFlags.Ephemeral,
     });
 
     return false;
@@ -5116,163 +5108,108 @@ async function checkUnbanOwner(interaction) {
   return true;
 }
 
-function getUnbanGuilds() {
-  return [
-    ...client.guilds.cache.values(),
-  ].sort(
-    (a, b) =>
-      a.name.localeCompare(
-        b.name,
-        'fr',
-      ),
+
+// ============================================================
+// Récupération de TOUS les serveurs du bot
+// ============================================================
+
+async function getUnbanGuilds() {
+  const fetchedGuilds = await client.guilds.fetch();
+
+  return [...fetchedGuilds.values()].sort((a, b) =>
+    a.name.localeCompare(b.name, 'fr'),
   );
 }
 
-function buildUnbanPanel(
-  interaction,
-  page = 0,
-) {
-  const guilds =
-    getUnbanGuilds();
 
-  const totalPages =
-    Math.max(
-      1,
-      Math.ceil(
-        guilds.length /
-          UNBAN_SERVERS_PER_PAGE,
-      ),
-    );
+// ============================================================
+// Création du panneau
+// ============================================================
 
-  const safePage =
-    Math.min(
-      Math.max(
-        0,
-        page,
-      ),
-      totalPages - 1,
-    );
+async function buildUnbanPanel(interaction, page = 0) {
+  const guilds = await getUnbanGuilds();
 
-  const start =
-    safePage *
-    UNBAN_SERVERS_PER_PAGE;
+  const totalPages = Math.max(
+    1,
+    Math.ceil(guilds.length / UNBAN_SERVERS_PER_PAGE),
+  );
 
-  const pageGuilds =
-    guilds.slice(
-      start,
-      start +
-        UNBAN_SERVERS_PER_PAGE,
-    );
+  const safePage = Math.min(
+    Math.max(0, page),
+    totalPages - 1,
+  );
 
-  const embed =
-    new EmbedBuilder()
-      .setColor(
-        0xed4245,
-      )
-      .setTitle(
-        '🔓 Débannissement',
-      )
-      .setDescription(
-        [
-          `Compte détecté : ${interaction.user}`,
-          '',
-          `**${guilds.length} serveur(s)** disponible(s).`,
-          '',
-          'Choisis le serveur sur lequel tu veux vérifier ton bannissement.',
-          '',
-          'Si ton compte est banni et que le bot possède la permission nécessaire, ton ban sera retiré automatiquement.',
-        ].join('\n'),
-      )
-      .setFooter({
-        text:
-          `Page ${safePage + 1}/${totalPages} • ${BRAND}`,
-      });
+  const start = safePage * UNBAN_SERVERS_PER_PAGE;
+
+  const pageGuilds = guilds.slice(
+    start,
+    start + UNBAN_SERVERS_PER_PAGE,
+  );
+
+  const embed = new EmbedBuilder()
+    .setColor(0xed4245)
+    .setTitle('🔓 Débannissement')
+    .setDescription(
+      [
+        `**Compte détecté :** ${interaction.user}`,
+        `**ID :** \`${interaction.user.id}\``,
+        '',
+        `**Serveurs détectés :** ${guilds.length}`,
+        '',
+        'Choisis le serveur sur lequel tu veux vérifier ton bannissement.',
+        '',
+        'Si ton compte est banni et que le bot possède la permission nécessaire, il te débannira automatiquement.',
+      ].join('\n'),
+    )
+    .setFooter({
+      text: `Page ${safePage + 1}/${totalPages} • ${BRAND}`,
+    });
 
   const components = [];
 
-  if (
-    pageGuilds.length
-  ) {
-    const select =
-      new StringSelectMenuBuilder()
-        .setCustomId(
-          `unban:server:${interaction.user.id}:${safePage}`,
-        )
-        .setPlaceholder(
-          'Choisir un serveur',
-        )
-        .setMinValues(1)
-        .setMaxValues(1)
-        .addOptions(
-          pageGuilds.map(
-            (guild) => ({
-              label:
-                guild.name.slice(
-                  0,
-                  100,
-                ),
-
-              description:
-                `ID : ${guild.id}`.slice(
-                  0,
-                  100,
-                ),
-
-              value:
-                guild.id,
-            }),
-          ),
-        );
+  if (pageGuilds.length > 0) {
+    const select = new StringSelectMenuBuilder()
+      .setCustomId(
+        `unban:server:${interaction.user.id}:${safePage}`,
+      )
+      .setPlaceholder('Choisir un serveur')
+      .setMinValues(1)
+      .setMaxValues(1)
+      .addOptions(
+        pageGuilds.map((guild) => ({
+          label: guild.name.slice(0, 100),
+          description: `ID : ${guild.id}`.slice(0, 100),
+          value: guild.id,
+        })),
+      );
 
     components.push(
-      new ActionRowBuilder()
-        .addComponents(
-          select,
-        ),
+      new ActionRowBuilder().addComponents(select),
     );
   }
 
-  if (
-    totalPages > 1
-  ) {
-    const navigation =
-      new ActionRowBuilder()
-        .addComponents(
-          new ButtonBuilder()
-            .setCustomId(
-              `unban:page:previous:${interaction.user.id}:${safePage}`,
-            )
-            .setLabel(
-              'Précédent',
-            )
-            .setEmoji('⬅️')
-            .setStyle(
-              ButtonStyle.Secondary,
-            )
-            .setDisabled(
-              safePage === 0,
-            ),
+  if (totalPages > 1) {
+    const navigation = new ActionRowBuilder().addComponents(
+      new ButtonBuilder()
+        .setCustomId(
+          `unban:page:previous:${interaction.user.id}:${safePage}`,
+        )
+        .setLabel('Précédent')
+        .setEmoji('⬅️')
+        .setStyle(ButtonStyle.Secondary)
+        .setDisabled(safePage === 0),
 
-          new ButtonBuilder()
-            .setCustomId(
-              `unban:page:next:${interaction.user.id}:${safePage}`,
-            )
-            .setLabel(
-              'Suivant',
-            )
-            .setEmoji('➡️')
-            .setStyle(
-              ButtonStyle.Secondary,
-            )
-            .setDisabled(
-              safePage >=
-                totalPages - 1,
-            ),
-        );
-
-    components.push(
-      navigation,
+      new ButtonBuilder()
+        .setCustomId(
+          `unban:page:next:${interaction.user.id}:${safePage}`,
+        )
+        .setLabel('Suivant')
+        .setEmoji('➡️')
+        .setStyle(ButtonStyle.Secondary)
+        .setDisabled(safePage >= totalPages - 1),
     );
+
+    components.push(navigation);
   }
 
   return {
@@ -5281,187 +5218,185 @@ function buildUnbanPanel(
   };
 }
 
-async function handleUnbanCommand(
-  interaction,
-) {
-  if (
-    !interaction.inGuild()
-  ) {
+
+// ============================================================
+// Commande /unban
+// ============================================================
+
+async function handleUnbanCommand(interaction) {
+  if (!interaction.inGuild()) {
     await interaction.reply({
       content:
         '❌ Utilise cette commande depuis un serveur où le bot est présent.',
-      flags:
-        MessageFlags.Ephemeral,
+      flags: MessageFlags.Ephemeral,
     });
 
     return;
   }
 
-  if (
-    !(
-      await checkUnbanOwner(
-        interaction,
-      )
-    )
-  ) {
+  if (!(await checkUnbanOwner(interaction))) {
     return;
   }
 
-  const guilds =
-    getUnbanGuilds();
+  await interaction.deferReply({
+    flags: MessageFlags.Ephemeral,
+  });
 
-  if (
-    !guilds.length
-  ) {
-    await interaction.reply({
-      content:
-        '❌ Le bot n’est actuellement présent sur aucun serveur.',
-      flags:
-        MessageFlags.Ephemeral,
-    });
+  try {
+    const guilds = await getUnbanGuilds();
 
-    return;
-  }
+    console.log(
+      'Serveurs détectés pour /unban :',
+      guilds.map(
+        (guild) => `${guild.name} (${guild.id})`,
+      ),
+    );
 
-  await interaction.reply({
-    ...buildUnbanPanel(
+    if (guilds.length === 0) {
+      await interaction.editReply({
+        content:
+          '❌ Le bot n’est actuellement présent sur aucun serveur.',
+        embeds: [],
+        components: [],
+      });
+
+      return;
+    }
+
+    const panel = await buildUnbanPanel(
       interaction,
       0,
-    ),
+    );
 
-    flags:
-      MessageFlags.Ephemeral,
-  });
+    await interaction.editReply(panel);
+  } catch (error) {
+    console.error(
+      'Impossible de récupérer les serveurs pour /unban :',
+      error,
+    );
+
+    await interaction.editReply({
+      content:
+        '❌ Impossible de récupérer la liste des serveurs du bot.',
+      embeds: [],
+      components: [],
+    });
+  }
 }
 
-async function handleUnbanServerSelect(
-  interaction,
-) {
-  const parts =
-    interaction.customId
-      .split(':');
 
-  const ownerId =
-    parts[2];
+// ============================================================
+// Sélection d’un serveur
+// ============================================================
 
-  if (
-    interaction.user.id !==
-    ownerId
-  ) {
+async function handleUnbanServerSelect(interaction) {
+  const parts = interaction.customId.split(':');
+
+  const ownerId = parts[2];
+
+  if (interaction.user.id !== ownerId) {
     await interaction.reply({
-      content:
-        '❌ Ce panneau ne t’appartient pas.',
-      flags:
-        MessageFlags.Ephemeral,
+      content: '❌ Ce panneau ne t’appartient pas.',
+      flags: MessageFlags.Ephemeral,
     });
 
     return;
   }
 
+  const authorizedUserId = getUnbanAuthorizedUserId();
+
   if (
-    !(
-      await checkUnbanOwner(
-        interaction,
-      )
-    )
+    !authorizedUserId ||
+    interaction.user.id !== authorizedUserId
   ) {
+    await interaction.reply({
+      content: '❌ Cette commande ne t’est pas autorisée.',
+      flags: MessageFlags.Ephemeral,
+    });
+
     return;
   }
 
-  const guildId =
-    interaction.values[0];
+  const guildId = interaction.values[0];
 
   await interaction.deferUpdate();
 
-  const guild =
-    client.guilds.cache.get(
-      guildId,
-    ) ??
-    await client.guilds
-      .fetch(
-        guildId,
+  try {
+    const guild = await client.guilds
+      .fetch(guildId)
+      .catch(() => null);
+
+    if (!guild) {
+      await interaction.editReply({
+        content:
+          '❌ Le bot n’est pas ou plus présent sur ce serveur.',
+        embeds: [],
+        components: [],
+      });
+
+      return;
+    }
+
+    const botMember =
+      guild.members.me ??
+      (await guild.members
+        .fetchMe()
+        .catch(() => null));
+
+    if (!botMember) {
+      await interaction.editReply({
+        content:
+          `❌ Impossible de récupérer les permissions du bot sur **${guild.name}**.`,
+        embeds: [],
+        components: [],
+      });
+
+      return;
+    }
+
+    if (
+      !botMember.permissions.has(
+        PermissionFlagsBits.BanMembers,
       )
-      .catch(
-        () => null,
-      );
+    ) {
+      await interaction.editReply({
+        content:
+          [
+            `❌ Le bot est bien présent sur **${guild.name}**.`,
+            '',
+            'Mais il ne possède pas la permission **Bannir des membres**.',
+          ].join('\n'),
+        embeds: [],
+        components: [],
+      });
 
-  if (!guild) {
-    await interaction.editReply({
-      content:
-        '❌ Le bot n’est plus présent sur ce serveur.',
+      return;
+    }
 
-      embeds: [],
-      components: [],
-    });
+    const userId = interaction.user.id;
 
-    return;
-  }
+    const ban = await guild.bans
+      .fetch(userId)
+      .catch(() => null);
 
-  const botMember =
-    guild.members.me ??
-    await guild.members
-      .fetchMe()
-      .catch(
-        () => null,
-      );
+    if (!ban) {
+      await interaction.editReply({
+        content:
+          [
+            'ℹ️ **Aucun bannissement détecté.**',
+            '',
+            `**Compte :** ${interaction.user}`,
+            `**Serveur :** ${guild.name}`,
+            '',
+            'Ton compte n’est pas dans la liste des membres bannis de ce serveur.',
+          ].join('\n'),
+        embeds: [],
+        components: [],
+      });
 
-  if (
-    !botMember
-  ) {
-    await interaction.editReply({
-      content:
-        `❌ Impossible de récupérer les permissions du bot sur **${guild.name}**.`,
+      return;
+    }
 
-      embeds: [],
-      components: [],
-    });
-
-    return;
-  }
-
-  if (
-    !botMember.permissions.has(
-      PermissionFlagsBits.BanMembers,
-    )
-  ) {
-    await interaction.editReply({
-      content:
-        `❌ Le bot est présent sur **${guild.name}**, mais il n’a pas la permission **Bannir des membres**.`,
-
-      embeds: [],
-      components: [],
-    });
-
-    return;
-  }
-
-  const userId =
-    interaction.user.id;
-
-  let ban = null;
-
-  try {
-    ban =
-      await guild.bans.fetch(
-        userId,
-      );
-  } catch {
-    ban = null;
-  }
-
-  if (!ban) {
-    await interaction.editReply({
-      content:
-        `ℹ️ Ton compte ${interaction.user} n’est pas banni de **${guild.name}**.`,
-
-      embeds: [],
-      components: [],
-    });
-
-    return;
-  }
-
-  try {
     await guild.bans.remove(
       userId,
       `Débannissement demandé via /unban par ${interaction.user.tag}`,
@@ -5473,70 +5408,61 @@ async function handleUnbanServerSelect(
           '✅ **Débannissement réussi !**',
           '',
           `**Compte :** ${interaction.user}`,
+          `**ID :** \`${userId}\``,
           `**Serveur :** ${guild.name}`,
           '',
           'Ton compte a été retiré de la liste des bannissements.',
         ].join('\n'),
-
       embeds: [],
       components: [],
     });
   } catch (error) {
     console.error(
-      `Erreur pendant le débannissement de ${userId} sur ${guild.id} :`,
+      `Erreur /unban sur le serveur ${guildId} :`,
       error,
     );
 
     await interaction.editReply({
       content:
-        `❌ Ton compte est bien banni de **${guild.name}**, mais le bot n’a pas réussi à retirer le ban.`,
-
+        '❌ Une erreur est survenue pendant la vérification ou le débannissement.',
       embeds: [],
       components: [],
     });
   }
 }
 
-async function handleUnbanPageButton(
-  interaction,
-) {
-  const parts =
-    interaction.customId
-      .split(':');
 
-  const direction =
-    parts[2];
+// ============================================================
+// Pages du panneau
+// ============================================================
 
-  const ownerId =
-    parts[3];
+async function handleUnbanPageButton(interaction) {
+  const parts = interaction.customId.split(':');
 
-  const currentPage =
-    Number(
-      parts[4],
-    ) || 0;
+  const direction = parts[2];
+  const ownerId = parts[3];
+  const currentPage = Number(parts[4]) || 0;
 
-  if (
-    interaction.user.id !==
-    ownerId
-  ) {
+  if (interaction.user.id !== ownerId) {
     await interaction.reply({
-      content:
-        '❌ Ce panneau ne t’appartient pas.',
-
-      flags:
-        MessageFlags.Ephemeral,
+      content: '❌ Ce panneau ne t’appartient pas.',
+      flags: MessageFlags.Ephemeral,
     });
 
     return;
   }
 
+  const authorizedUserId = getUnbanAuthorizedUserId();
+
   if (
-    !(
-      await checkUnbanOwner(
-        interaction,
-      )
-    )
+    !authorizedUserId ||
+    interaction.user.id !== authorizedUserId
   ) {
+    await interaction.reply({
+      content: '❌ Cette commande ne t’est pas autorisée.',
+      flags: MessageFlags.Ephemeral,
+    });
+
     return;
   }
 
@@ -5545,17 +5471,17 @@ async function handleUnbanPageButton(
       ? currentPage + 1
       : currentPage - 1;
 
-  await interaction.update(
-    buildUnbanPanel(
-      interaction,
-      nextPage,
-    ),
+  const panel = await buildUnbanPanel(
+    interaction,
+    nextPage,
   );
+
+  await interaction.update(panel);
 }
 
 
 // ============================================================
-// Ajout de /unban dans le gestionnaire de commandes existant
+// Ajout de /unban au gestionnaire existant
 // ============================================================
 
 const handleAdminCommandAvantUnban =
@@ -5565,13 +5491,8 @@ handleAdminCommand =
   async function handleAdminCommandAvecUnban(
     interaction,
   ) {
-    if (
-      interaction.commandName ===
-      'unban'
-    ) {
-      return handleUnbanCommand(
-        interaction,
-      );
+    if (interaction.commandName === 'unban') {
+      return handleUnbanCommand(interaction);
     }
 
     return handleAdminCommandAvantUnban(
@@ -5581,7 +5502,7 @@ handleAdminCommand =
 
 
 // ============================================================
-// Gestion du menu et des boutons /unban
+// Gestion des interactions du panneau /unban
 // ============================================================
 
 client.on(
@@ -5610,6 +5531,8 @@ client.on(
         await handleUnbanPageButton(
           interaction,
         );
+
+        return;
       }
     } catch (error) {
       console.error(
@@ -5620,9 +5543,7 @@ client.on(
       const payload = {
         content:
           '❌ Une erreur est survenue avec `/unban`.',
-
-        flags:
-          MessageFlags.Ephemeral,
+        flags: MessageFlags.Ephemeral,
       };
 
       if (
@@ -5630,20 +5551,12 @@ client.on(
         interaction.replied
       ) {
         await interaction
-          .followUp(
-            payload,
-          )
-          .catch(
-            () => null,
-          );
+          .followUp(payload)
+          .catch(() => null);
       } else {
         await interaction
-          .reply(
-            payload,
-          )
-          .catch(
-            () => null,
-          );
+          .reply(payload)
+          .catch(() => null);
       }
     }
   },
