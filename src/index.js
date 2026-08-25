@@ -5074,19 +5074,25 @@ setInterval(
   60_000,
 ).unref();
 // ============================================================
-// /unban — panneau de self-unban multi-serveurs
+// /servlist — liste des serveurs + retrait du bot
 // ============================================================
 
-const UNBAN_SERVERS_PER_PAGE = 25;
+const SERVLIST_SERVERS_PER_PAGE = 25;
 
-function getUnbanAuthorizedUserId() {
+function getServlistOwnerId() {
   return process.env.UNBAN_OWNER_ID?.trim() || null;
 }
 
-async function checkUnbanOwner(interaction) {
-  const authorizedUserId = getUnbanAuthorizedUserId();
+function getServlistGuilds() {
+  return [...client.guilds.cache.values()].sort((a, b) =>
+    a.name.localeCompare(b.name, 'fr'),
+  );
+}
 
-  if (!authorizedUserId) {
+async function checkServlistOwner(interaction) {
+  const ownerId = getServlistOwnerId();
+
+  if (!ownerId) {
     await interaction.reply({
       content:
         '❌ `UNBAN_OWNER_ID` n’est pas configuré dans les variables d’environnement.',
@@ -5096,9 +5102,10 @@ async function checkUnbanOwner(interaction) {
     return false;
   }
 
-  if (interaction.user.id !== authorizedUserId) {
+  if (interaction.user.id !== ownerId) {
     await interaction.reply({
-      content: '❌ Cette commande ne t’est pas autorisée.',
+      content:
+        '❌ Tu n’es pas autorisé à utiliser cette commande.',
       flags: MessageFlags.Ephemeral,
     });
 
@@ -5110,28 +5117,18 @@ async function checkUnbanOwner(interaction) {
 
 
 // ============================================================
-// Récupération de TOUS les serveurs du bot
+// Panel principal
 // ============================================================
 
-async function getUnbanGuilds() {
-  const fetchedGuilds = await client.guilds.fetch();
-
-  return [...fetchedGuilds.values()].sort((a, b) =>
-    a.name.localeCompare(b.name, 'fr'),
-  );
-}
-
-
-// ============================================================
-// Création du panneau
-// ============================================================
-
-async function buildUnbanPanel(interaction, page = 0) {
-  const guilds = await getUnbanGuilds();
+function buildServlistPanel(interaction, page = 0) {
+  const guilds = getServlistGuilds();
 
   const totalPages = Math.max(
     1,
-    Math.ceil(guilds.length / UNBAN_SERVERS_PER_PAGE),
+    Math.ceil(
+      guilds.length /
+        SERVLIST_SERVERS_PER_PAGE,
+    ),
   );
 
   const safePage = Math.min(
@@ -5139,77 +5136,116 @@ async function buildUnbanPanel(interaction, page = 0) {
     totalPages - 1,
   );
 
-  const start = safePage * UNBAN_SERVERS_PER_PAGE;
+  const start =
+    safePage *
+    SERVLIST_SERVERS_PER_PAGE;
 
   const pageGuilds = guilds.slice(
     start,
-    start + UNBAN_SERVERS_PER_PAGE,
+    start +
+      SERVLIST_SERVERS_PER_PAGE,
   );
 
   const embed = new EmbedBuilder()
-    .setColor(0xed4245)
-    .setTitle('🔓 Débannissement')
+    .setColor(0x5865f2)
+    .setTitle('🌐 Liste des serveurs')
     .setDescription(
       [
-        `**Compte détecté :** ${interaction.user}`,
-        `**ID :** \`${interaction.user.id}\``,
+        `**Bot :** ${client.user}`,
         '',
         `**Serveurs détectés :** ${guilds.length}`,
         '',
-        'Choisis le serveur sur lequel tu veux vérifier ton bannissement.',
+        'Sélectionne un serveur pour afficher les options.',
         '',
-        'Si ton compte est banni et que le bot possède la permission nécessaire, il te débannira automatiquement.',
+        '⚠️ Le bouton de confirmation fera quitter le serveur au bot.',
       ].join('\n'),
     )
     .setFooter({
-      text: `Page ${safePage + 1}/${totalPages} • ${BRAND}`,
+      text:
+        `Page ${safePage + 1}/${totalPages} • ${BRAND}`,
     });
 
   const components = [];
 
   if (pageGuilds.length > 0) {
-    const select = new StringSelectMenuBuilder()
-      .setCustomId(
-        `unban:server:${interaction.user.id}:${safePage}`,
-      )
-      .setPlaceholder('Choisir un serveur')
-      .setMinValues(1)
-      .setMaxValues(1)
-      .addOptions(
-        pageGuilds.map((guild) => ({
-          label: guild.name.slice(0, 100),
-          description: `ID : ${guild.id}`.slice(0, 100),
-          value: guild.id,
-        })),
-      );
+    const select =
+      new StringSelectMenuBuilder()
+        .setCustomId(
+          `servlist:server:${interaction.user.id}:${safePage}`,
+        )
+        .setPlaceholder(
+          'Choisir un serveur',
+        )
+        .setMinValues(1)
+        .setMaxValues(1)
+        .addOptions(
+          pageGuilds.map(
+            (guild) => ({
+              label:
+                guild.name.slice(
+                  0,
+                  100,
+                ),
+
+              description:
+                `${guild.memberCount ?? '?'} membres • ${guild.id}`.slice(
+                  0,
+                  100,
+                ),
+
+              value:
+                guild.id,
+            }),
+          ),
+        );
 
     components.push(
-      new ActionRowBuilder().addComponents(select),
+      new ActionRowBuilder()
+        .addComponents(
+          select,
+        ),
     );
   }
 
   if (totalPages > 1) {
-    const navigation = new ActionRowBuilder().addComponents(
-      new ButtonBuilder()
-        .setCustomId(
-          `unban:page:previous:${interaction.user.id}:${safePage}`,
-        )
-        .setLabel('Précédent')
-        .setEmoji('⬅️')
-        .setStyle(ButtonStyle.Secondary)
-        .setDisabled(safePage === 0),
+    const navigation =
+      new ActionRowBuilder()
+        .addComponents(
+          new ButtonBuilder()
+            .setCustomId(
+              `servlist:page:previous:${interaction.user.id}:${safePage}`,
+            )
+            .setLabel(
+              'Précédent',
+            )
+            .setEmoji('⬅️')
+            .setStyle(
+              ButtonStyle.Secondary,
+            )
+            .setDisabled(
+              safePage === 0,
+            ),
 
-      new ButtonBuilder()
-        .setCustomId(
-          `unban:page:next:${interaction.user.id}:${safePage}`,
-        )
-        .setLabel('Suivant')
-        .setEmoji('➡️')
-        .setStyle(ButtonStyle.Secondary)
-        .setDisabled(safePage >= totalPages - 1),
+          new ButtonBuilder()
+            .setCustomId(
+              `servlist:page:next:${interaction.user.id}:${safePage}`,
+            )
+            .setLabel(
+              'Suivant',
+            )
+            .setEmoji('➡️')
+            .setStyle(
+              ButtonStyle.Secondary,
+            )
+            .setDisabled(
+              safePage >=
+                totalPages - 1,
+            ),
+        );
+
+    components.push(
+      navigation,
     );
-
-    components.push(navigation);
   }
 
   return {
@@ -5220,68 +5256,54 @@ async function buildUnbanPanel(interaction, page = 0) {
 
 
 // ============================================================
-// Commande /unban
+// /servlist
 // ============================================================
 
-async function handleUnbanCommand(interaction) {
+async function handleServlistCommand(interaction) {
   if (!interaction.inGuild()) {
     await interaction.reply({
       content:
-        '❌ Utilise cette commande depuis un serveur où le bot est présent.',
-      flags: MessageFlags.Ephemeral,
+        '❌ Cette commande doit être utilisée depuis un serveur.',
+      flags:
+        MessageFlags.Ephemeral,
     });
 
     return;
   }
 
-  if (!(await checkUnbanOwner(interaction))) {
+  if (!(await checkServlistOwner(interaction))) {
     return;
   }
 
-  await interaction.deferReply({
-    flags: MessageFlags.Ephemeral,
-  });
+  const guilds = getServlistGuilds();
 
-  try {
-    const guilds = await getUnbanGuilds();
+  console.log(
+    '========================================',
+  );
 
+  console.log(
+    `SERVLIST — ${guilds.length} serveur(s) détecté(s)`,
+  );
+
+  for (const guild of guilds) {
     console.log(
-      'Serveurs détectés pour /unban :',
-      guilds.map(
-        (guild) => `${guild.name} (${guild.id})`,
-      ),
+      `${guild.name} (${guild.id})`,
     );
+  }
 
-    if (guilds.length === 0) {
-      await interaction.editReply({
-        content:
-          '❌ Le bot n’est actuellement présent sur aucun serveur.',
-        embeds: [],
-        components: [],
-      });
+  console.log(
+    '========================================',
+  );
 
-      return;
-    }
-
-    const panel = await buildUnbanPanel(
+  await interaction.reply({
+    ...buildServlistPanel(
       interaction,
       0,
-    );
+    ),
 
-    await interaction.editReply(panel);
-  } catch (error) {
-    console.error(
-      'Impossible de récupérer les serveurs pour /unban :',
-      error,
-    );
-
-    await interaction.editReply({
-      content:
-        '❌ Impossible de récupérer la liste des serveurs du bot.',
-      embeds: [],
-      components: [],
-    });
-  }
+    flags:
+      MessageFlags.Ephemeral,
+  });
 }
 
 
@@ -5289,178 +5311,297 @@ async function handleUnbanCommand(interaction) {
 // Sélection d’un serveur
 // ============================================================
 
-async function handleUnbanServerSelect(interaction) {
-  const parts = interaction.customId.split(':');
+async function handleServlistServerSelect(
+  interaction,
+) {
+  const parts =
+    interaction.customId.split(':');
 
   const ownerId = parts[2];
-
-  if (interaction.user.id !== ownerId) {
-    await interaction.reply({
-      content: '❌ Ce panneau ne t’appartient pas.',
-      flags: MessageFlags.Ephemeral,
-    });
-
-    return;
-  }
-
-  const authorizedUserId = getUnbanAuthorizedUserId();
+  const page =
+    Number(parts[3]) || 0;
 
   if (
-    !authorizedUserId ||
-    interaction.user.id !== authorizedUserId
+    interaction.user.id !==
+    ownerId
   ) {
     await interaction.reply({
-      content: '❌ Cette commande ne t’est pas autorisée.',
-      flags: MessageFlags.Ephemeral,
+      content:
+        '❌ Ce panneau ne t’appartient pas.',
+      flags:
+        MessageFlags.Ephemeral,
     });
 
     return;
   }
 
-  const guildId = interaction.values[0];
+  const configuredOwner =
+    getServlistOwnerId();
 
-  await interaction.deferUpdate();
-
-  try {
-    const guild = await client.guilds
-      .fetch(guildId)
-      .catch(() => null);
-
-    if (!guild) {
-      await interaction.editReply({
-        content:
-          '❌ Le bot n’est pas ou plus présent sur ce serveur.',
-        embeds: [],
-        components: [],
-      });
-
-      return;
-    }
-
-    const botMember =
-      guild.members.me ??
-      (await guild.members
-        .fetchMe()
-        .catch(() => null));
-
-    if (!botMember) {
-      await interaction.editReply({
-        content:
-          `❌ Impossible de récupérer les permissions du bot sur **${guild.name}**.`,
-        embeds: [],
-        components: [],
-      });
-
-      return;
-    }
-
-    if (
-      !botMember.permissions.has(
-        PermissionFlagsBits.BanMembers,
-      )
-    ) {
-      await interaction.editReply({
-        content:
-          [
-            `❌ Le bot est bien présent sur **${guild.name}**.`,
-            '',
-            'Mais il ne possède pas la permission **Bannir des membres**.',
-          ].join('\n'),
-        embeds: [],
-        components: [],
-      });
-
-      return;
-    }
-
-    const userId = interaction.user.id;
-
-    const ban = await guild.bans
-      .fetch(userId)
-      .catch(() => null);
-
-    if (!ban) {
-      await interaction.editReply({
-        content:
-          [
-            'ℹ️ **Aucun bannissement détecté.**',
-            '',
-            `**Compte :** ${interaction.user}`,
-            `**Serveur :** ${guild.name}`,
-            '',
-            'Ton compte n’est pas dans la liste des membres bannis de ce serveur.',
-          ].join('\n'),
-        embeds: [],
-        components: [],
-      });
-
-      return;
-    }
-
-    await guild.bans.remove(
-      userId,
-      `Débannissement demandé via /unban par ${interaction.user.tag}`,
-    );
-
-    await interaction.editReply({
+  if (
+    !configuredOwner ||
+    interaction.user.id !==
+      configuredOwner
+  ) {
+    await interaction.reply({
       content:
-        [
-          '✅ **Débannissement réussi !**',
-          '',
-          `**Compte :** ${interaction.user}`,
-          `**ID :** \`${userId}\``,
-          `**Serveur :** ${guild.name}`,
-          '',
-          'Ton compte a été retiré de la liste des bannissements.',
-        ].join('\n'),
+        '❌ Tu n’es pas autorisé à utiliser cette commande.',
+      flags:
+        MessageFlags.Ephemeral,
+    });
+
+    return;
+  }
+
+  const guildId =
+    interaction.values[0];
+
+  const guild =
+    client.guilds.cache.get(
+      guildId,
+    ) ??
+    (await client.guilds
+      .fetch(guildId)
+      .catch(() => null));
+
+  if (!guild) {
+    await interaction.update({
+      content:
+        '❌ Le bot n’est plus présent sur ce serveur.',
       embeds: [],
       components: [],
     });
+
+    return;
+  }
+
+  const embed =
+    new EmbedBuilder()
+      .setColor(
+        0xed4245,
+      )
+      .setTitle(
+        '⚠️ Confirmation',
+      )
+      .setDescription(
+        [
+          'Tu es sur le point de retirer le bot du serveur :',
+          '',
+          `# ${guild.name}`,
+          '',
+          `**ID :** \`${guild.id}\``,
+          `**Membres :** ${guild.memberCount ?? 'Inconnu'}`,
+          '',
+          '⚠️ Une fois le bot parti, tu devras utiliser une nouvelle invitation pour le remettre sur ce serveur.',
+        ].join('\n'),
+      );
+
+  const buttons =
+    new ActionRowBuilder()
+      .addComponents(
+        new ButtonBuilder()
+          .setCustomId(
+            `servlist:leave:${interaction.user.id}:${guild.id}`,
+          )
+          .setLabel(
+            'Quitter le serveur',
+          )
+          .setEmoji('🚪')
+          .setStyle(
+            ButtonStyle.Danger,
+          ),
+
+        new ButtonBuilder()
+          .setCustomId(
+            `servlist:cancel:${interaction.user.id}:${page}`,
+          )
+          .setLabel(
+            'Annuler',
+          )
+          .setEmoji('↩️')
+          .setStyle(
+            ButtonStyle.Secondary,
+          ),
+      );
+
+  await interaction.update({
+    embeds: [embed],
+    components: [buttons],
+  });
+}
+
+
+// ============================================================
+// Bouton quitter
+// ============================================================
+
+async function handleServlistLeaveButton(
+  interaction,
+) {
+  const parts =
+    interaction.customId.split(':');
+
+  const ownerId = parts[2];
+  const guildId = parts[3];
+
+  if (
+    interaction.user.id !==
+    ownerId
+  ) {
+    await interaction.reply({
+      content:
+        '❌ Ce panneau ne t’appartient pas.',
+      flags:
+        MessageFlags.Ephemeral,
+    });
+
+    return;
+  }
+
+  const configuredOwner =
+    getServlistOwnerId();
+
+  if (
+    !configuredOwner ||
+    interaction.user.id !==
+      configuredOwner
+  ) {
+    await interaction.reply({
+      content:
+        '❌ Tu n’es pas autorisé à utiliser cette commande.',
+      flags:
+        MessageFlags.Ephemeral,
+    });
+
+    return;
+  }
+
+  const guild =
+    client.guilds.cache.get(
+      guildId,
+    ) ??
+    (await client.guilds
+      .fetch(guildId)
+      .catch(() => null));
+
+  if (!guild) {
+    await interaction.update({
+      content:
+        '❌ Le bot n’est plus présent sur ce serveur.',
+      embeds: [],
+      components: [],
+    });
+
+    return;
+  }
+
+  const guildName =
+    guild.name;
+
+  await interaction.update({
+    content:
+      [
+        '🚪 **Retrait du bot...**',
+        '',
+        `Serveur : **${guildName}**`,
+        '',
+        'Le bot va maintenant quitter ce serveur.',
+      ].join('\n'),
+
+    embeds: [],
+    components: [],
+  });
+
+  try {
+    await guild.leave();
+
+    console.log(
+      `✅ Bot retiré de ${guildName} (${guildId})`,
+    );
   } catch (error) {
     console.error(
-      `Erreur /unban sur le serveur ${guildId} :`,
+      `❌ Impossible de quitter ${guildName} (${guildId}) :`,
       error,
     );
 
-    await interaction.editReply({
-      content:
-        '❌ Une erreur est survenue pendant la vérification ou le débannissement.',
-      embeds: [],
-      components: [],
-    });
+    await interaction
+      .followUp({
+        content:
+          `❌ Impossible de quitter **${guildName}**.`,
+
+        flags:
+          MessageFlags.Ephemeral,
+      })
+      .catch(() => null);
   }
 }
 
 
 // ============================================================
-// Pages du panneau
+// Annuler
 // ============================================================
 
-async function handleUnbanPageButton(interaction) {
-  const parts = interaction.customId.split(':');
+async function handleServlistCancelButton(
+  interaction,
+) {
+  const parts =
+    interaction.customId.split(':');
 
-  const direction = parts[2];
-  const ownerId = parts[3];
-  const currentPage = Number(parts[4]) || 0;
+  const ownerId = parts[2];
+  const page =
+    Number(parts[3]) || 0;
 
-  if (interaction.user.id !== ownerId) {
+  if (
+    interaction.user.id !==
+    ownerId
+  ) {
     await interaction.reply({
-      content: '❌ Ce panneau ne t’appartient pas.',
-      flags: MessageFlags.Ephemeral,
+      content:
+        '❌ Ce panneau ne t’appartient pas.',
+      flags:
+        MessageFlags.Ephemeral,
     });
 
     return;
   }
 
-  const authorizedUserId = getUnbanAuthorizedUserId();
+  await interaction.update(
+    buildServlistPanel(
+      interaction,
+      page,
+    ),
+  );
+}
+
+
+// ============================================================
+// Pages
+// ============================================================
+
+async function handleServlistPageButton(
+  interaction,
+) {
+  const parts =
+    interaction.customId.split(':');
+
+  const direction =
+    parts[2];
+
+  const ownerId =
+    parts[3];
+
+  const currentPage =
+    Number(parts[4]) || 0;
 
   if (
-    !authorizedUserId ||
-    interaction.user.id !== authorizedUserId
+    interaction.user.id !==
+    ownerId
   ) {
     await interaction.reply({
-      content: '❌ Cette commande ne t’est pas autorisée.',
-      flags: MessageFlags.Ephemeral,
+      content:
+        '❌ Ce panneau ne t’appartient pas.',
+      flags:
+        MessageFlags.Ephemeral,
     });
 
     return;
@@ -5471,38 +5612,43 @@ async function handleUnbanPageButton(interaction) {
       ? currentPage + 1
       : currentPage - 1;
 
-  const panel = await buildUnbanPanel(
-    interaction,
-    nextPage,
+  await interaction.update(
+    buildServlistPanel(
+      interaction,
+      nextPage,
+    ),
   );
-
-  await interaction.update(panel);
 }
 
 
 // ============================================================
-// Ajout de /unban au gestionnaire existant
+// Ajout /servlist dans le gestionnaire
 // ============================================================
 
-const handleAdminCommandAvantUnban =
+const handleAdminCommandAvantServlist =
   handleAdminCommand;
 
 handleAdminCommand =
-  async function handleAdminCommandAvecUnban(
+  async function handleAdminCommandAvecServlist(
     interaction,
   ) {
-    if (interaction.commandName === 'unban') {
-      return handleUnbanCommand(interaction);
+    if (
+      interaction.commandName ===
+      'servlist'
+    ) {
+      return handleServlistCommand(
+        interaction,
+      );
     }
 
-    return handleAdminCommandAvantUnban(
+    return handleAdminCommandAvantServlist(
       interaction,
     );
   };
 
 
 // ============================================================
-// Gestion des interactions du panneau /unban
+// Interactions du panel /servlist
 // ============================================================
 
 client.on(
@@ -5512,10 +5658,10 @@ client.on(
       if (
         interaction.isStringSelectMenu() &&
         interaction.customId.startsWith(
-          'unban:server:',
+          'servlist:server:',
         )
       ) {
-        await handleUnbanServerSelect(
+        await handleServlistServerSelect(
           interaction,
         );
 
@@ -5525,10 +5671,36 @@ client.on(
       if (
         interaction.isButton() &&
         interaction.customId.startsWith(
-          'unban:page:',
+          'servlist:leave:',
         )
       ) {
-        await handleUnbanPageButton(
+        await handleServlistLeaveButton(
+          interaction,
+        );
+
+        return;
+      }
+
+      if (
+        interaction.isButton() &&
+        interaction.customId.startsWith(
+          'servlist:cancel:',
+        )
+      ) {
+        await handleServlistCancelButton(
+          interaction,
+        );
+
+        return;
+      }
+
+      if (
+        interaction.isButton() &&
+        interaction.customId.startsWith(
+          'servlist:page:',
+        )
+      ) {
+        await handleServlistPageButton(
           interaction,
         );
 
@@ -5536,14 +5708,16 @@ client.on(
       }
     } catch (error) {
       console.error(
-        'Erreur système /unban :',
+        'Erreur /servlist :',
         error,
       );
 
       const payload = {
         content:
-          '❌ Une erreur est survenue avec `/unban`.',
-        flags: MessageFlags.Ephemeral,
+          '❌ Une erreur est survenue avec `/servlist`.',
+
+        flags:
+          MessageFlags.Ephemeral,
       };
 
       if (
